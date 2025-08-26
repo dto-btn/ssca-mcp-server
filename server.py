@@ -4,13 +4,18 @@ FastMCP quickstart example.
 cd to the `examples/snippets/clients` directory and run:
     uv run server fastmcp_quickstart stdio
 """
-from pydantic import BaseModel, Field
-
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 # Create an MCP server
-mcp = FastMCP("Demo")
+mcp = FastMCP("Shared Services Canada Assistant MCP Server",
+              auth=AuthSettings(
+                issuer_url=AnyHttpUrl("https://auth.example.com"),  # Authorization Server URL
+                resource_server_url=AnyHttpUrl("http://localhost:3001"),  # This server's URL
+                required_scopes=["user"],
+            ),)
 
 
 # Add an addition tool
