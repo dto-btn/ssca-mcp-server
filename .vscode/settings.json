@@ -1,0 +1,8 @@
+{
+    "editor.rulers": [
+        /*80,*/120
+    ],
+    "pylint.args": [
+        "--rcfile=.vscode/pylintrc"
+    ],
+}

@@ -61,7 +61,8 @@ async def book_table(date: str, time: str, party_size: int, ctx: Context[ServerS
     if date == "2024-12-25":
         # Date unavailable - ask user for alternative
         result = await ctx.elicit(
-            message=(f"No tables available for {party_size} on {date}. Would you like to try another date?"),
+            message=(f"""No tables available for {party_size} on {date}.
+                     Would you like to try another date?"""),
             schema=BookingPreferences,
         )
 
