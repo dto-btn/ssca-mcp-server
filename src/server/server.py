@@ -11,12 +11,14 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 
 # Create an MCP server
 mcp = FastMCP("Shared Services Canada Assistant MCP Server",
-              auth=AuthSettings(
+            auth=AuthSettings(
                 issuer_url=AnyHttpUrl("https://auth.example.com"),  # Authorization Server URL
                 resource_server_url=AnyHttpUrl("http://localhost:3001"),  # This server's URL
                 required_scopes=["user"],
-            ),)
-
+            ),
+            #token_verifier=SimpleTokenVerifier(),  # Optional custom token verifier
+            auth_server_provider=("https://163gc.onmicrosoft.com",)
+)
 
 # Add an addition tool
 @mcp.tool()
