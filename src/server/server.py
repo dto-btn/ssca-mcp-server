@@ -8,6 +8,14 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from pydantic import AnyHttpUrl, BaseModel, Field
+from typing import Any
+import requests
+
+from json import JSONDecodeError
+
+
+OPEN_PARLIAMENT_API_BASE = "https://api.openparliament.ca"
+
 
 # Create an MCP server
 mcp = FastMCP("Shared Services Canada Assistant MCP Server",
@@ -19,6 +27,26 @@ mcp = FastMCP("Shared Services Canada Assistant MCP Server",
             #token_verifier=SimpleTokenVerifier(),  # Optional custom token verifier
             auth_server_provider=("https://163gc.onmicrosoft.com",)
 )
+
+# Query OpenParliament for the list of Canadian MPs
+@mcp.tool()
+def list_all_mps() -> list[dict[str, str]]:
+    """List all Canadian Members of Parliament"""
+    try:
+        response = requests.get(
+            f"{OPEN_PARLIAMENT_API_BASE}/politicians/?include=all",
+            headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        return [{"name": mp["name"]} for mp in data["objects"]]
+    
+    except requests.RequestException as e:
+        return [{"error": f"Failed to fetch MPs: {str(e)}"}]
+
+    except JSONDecodeError:
+        return [{"error": "Failed to decode JSON response"}]
 
 # Add an addition tool
 @mcp.tool()
