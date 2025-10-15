@@ -4,10 +4,9 @@ FastMCP quickstart example.
 cd to the `examples/snippets/clients` directory and run:
     uv run server fastmcp_quickstart stdio
 """
-# from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import BaseModel, Field
 from typing import Any
 import requests
 from starlette.middleware.cors import CORSMiddleware
@@ -22,13 +21,11 @@ OPEN_PARLIAMENT_API_BASE = "https://api.openparliament.ca"
 # Create an MCP server
 mcp = FastMCP(
     "Shared Services Canada Assistant MCP Server",
-    # Expose the server publicly on all interfaces so it can be reached directly.
     host="0.0.0.0",
     port=8000,
     stateless_http=True,
-    # No auth settings by default: this makes the StreamableHTTP endpoints public.
-    # auth=AuthSettings(...),
 )
+
 
 # Query OpenParliament for the list of Canadian MPs
 @mcp.tool()
@@ -49,6 +46,7 @@ def list_all_mps() -> list[dict[str, str]]:
 
     except JSONDecodeError:
         return [{"error": "Failed to decode JSON response"}]
+
 
 # Add an addition tool
 @mcp.tool()
@@ -76,6 +74,7 @@ def greet_user(name: str, style: str = "friendly") -> str:
 
     return f"{styles.get(style, styles['friendly'])} for someone named {name}."
 
+
 class BookingPreferences(BaseModel):
     """Schema for collecting user preferences."""
 
@@ -84,7 +83,6 @@ class BookingPreferences(BaseModel):
         default="2024-12-26",
         description="Alternative date (YYYY-MM-DD)",
     )
-
 
 @mcp.tool()
 async def book_table(date: str, time: str, party_size: int, ctx: Context[ServerSession, None]) -> str:
@@ -108,9 +106,8 @@ async def book_table(date: str, time: str, party_size: int, ctx: Context[ServerS
     return f"[SUCCESS] Booked for {date} at {time}"
 
 
-# Create the Starlette app from FastMCP at import time so it can be
-# run by uvicorn as a module (or directly). This also allows external
-# processes to mount the app if needed.
+# Create the Starlette app from FastMCP at import time so it can be run by uvicorn as a module (or directly).
+# This also allows external processes to mount the app if needed.
 app = mcp.streamable_http_app()
 
 # Attach permissive CORS so browsers can connect directly without running into preflight/CORS errors
