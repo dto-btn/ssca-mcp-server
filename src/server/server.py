@@ -25,6 +25,7 @@ mcp = FastMCP(
     # Expose the server publicly on all interfaces so it can be reached directly.
     host="0.0.0.0",
     port=8000,
+    stateless_http=True,
     # No auth settings by default: this makes the StreamableHTTP endpoints public.
     # auth=AuthSettings(...),
 )
