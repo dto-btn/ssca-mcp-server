@@ -4,7 +4,7 @@ FastMCP quickstart example.
 cd to the `examples/snippets/clients` directory and run:
     uv run server fastmcp_quickstart stdio
 """
-from mcp.server.auth.settings import AuthSettings
+# from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from pydantic import AnyHttpUrl, BaseModel, Field
@@ -107,13 +107,13 @@ async def book_table(date: str, time: str, party_size: int, ctx: Context[ServerS
     # Date available
     return f"[SUCCESS] Booked for {date} at {time}"
 
+
 # Create the Starlette app from FastMCP at import time so it can be
 # run by uvicorn as a module (or directly). This also allows external
 # processes to mount the app if needed.
 app = mcp.streamable_http_app()
 
-# Attach permissive CORS so browsers can connect directly without running into
-# preflight/CORS errors. For production, consider restricting origins.
+# Attach permissive CORS so browsers can connect directly without running into preflight/CORS errors
 try:
     app.add_middleware(
         CORSMiddleware,
