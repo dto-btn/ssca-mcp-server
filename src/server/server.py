@@ -114,11 +114,9 @@ app = mcp.streamable_http_app()
 # Attach permissive CORS so browsers can connect directly without running into
 # preflight/CORS errors. For production, consider restricting origins.
 try:
-    
-
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # consider restricting this to trusted origins
+        allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
         allow_credentials=True,
@@ -130,7 +128,6 @@ except Exception:
 
 if __name__ == "__main__":
     # Run directly for local testing
-
     uvicorn.run(
         app,
         host=str(mcp.settings.host or "0.0.0.0"),
