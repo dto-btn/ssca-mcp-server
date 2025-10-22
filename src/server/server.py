@@ -141,8 +141,9 @@ starlette_app = Starlette(
 starlette_app = CORSMiddleware(
     starlette_app,
     allow_origins=["*"],  # Allow all origins
-    allow_methods=["GET", "POST", "DELETE"],  # MCP streamable HTTP methods
+    allow_methods=["*"],  # MCP streamable HTTP methods
+    allow_headers=["*"],  # Allow all headers
     expose_headers=["Mcp-Session-Id"],
 )
 
-uvicorn.run(starlette_app, host="127.0.0.1", port=3001)
+uvicorn.run(starlette_app, host="127.0.0.1", port=8000)
