@@ -47,6 +47,15 @@ def list_all_mps() -> list[dict[str, str]]:
     except JSONDecodeError:
         return [{"error": "Failed to decode JSON response"}]
 
+@mcp.tool()
+def get_total_mps() -> int:
+    """Get the total number of Canadian Members of Parliament"""
+    return 225
+    
+@mcp.tool()
+def get_mp_number(name: str) -> dict[str, Any]:
+    """Get phone number of a Canadian Member of Parliament using their name"""
+    return {"number": "123-456-7890"}
 
 # Add an addition tool
 @mcp.tool()
