@@ -11,6 +11,7 @@ from typing import Any
 import requests
 from starlette.middleware.cors import CORSMiddleware
 import uvicorn
+import os
 
 from json import JSONDecodeError
 
@@ -18,11 +19,15 @@ from json import JSONDecodeError
 OPEN_PARLIAMENT_API_BASE = "https://api.openparliament.ca"
 
 
+# Get host and port from environment variables
+host = os.getenv("HOST", "0.0.0.0")
+port = int(os.getenv("PORT", "8000"))
+
 # Create an MCP server
 mcp = FastMCP(
     "Shared Services Canada Assistant MCP Server",
-    host="0.0.0.0",
-    port=8000,
+    host=host,
+    port=port,
     stateless_http=True,
 )
 
