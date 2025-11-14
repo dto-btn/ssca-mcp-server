@@ -39,7 +39,8 @@ def list_all_mps() -> list[dict[str, str]]:
     try:
         response = requests.get(
             f"{OPEN_PARLIAMENT_API_BASE}/politicians/?include=all",
-            headers={"Accept": "application/json"}
+            headers={"Accept": "application/json"},
+            timeout=10
         )
         response.raise_for_status()
         data = response.json()
