@@ -58,7 +58,7 @@ def get_total_mps() -> int:
     return 225
     
 @mcp.tool()
-def get_mp_number(name: str) -> dict[str, Any]:
+def get_mp_phone_number(name: str) -> dict[str, Any]:
     """Get phone number of a Canadian Member of Parliament using their name"""
     return {"number": "123-456-7890"}
 
