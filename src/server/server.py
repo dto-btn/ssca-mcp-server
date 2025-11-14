@@ -34,11 +34,11 @@ mcp = FastMCP(
 
 # Query OpenParliament for the list of Canadian MPs
 @mcp.tool()
-def list_all_mps() -> list[dict[str, str]]:
+def list_100_mps() -> list[dict[str, str]]:
     """List all Canadian Members of Parliament"""
     try:
         response = requests.get(
-            f"{OPEN_PARLIAMENT_API_BASE}/politicians/?include=all",
+            f"{OPEN_PARLIAMENT_API_BASE}/politicians/?include=all&limit=100&offset=0",
             headers={"Accept": "application/json"},
             timeout=10
         )
@@ -56,7 +56,7 @@ def list_all_mps() -> list[dict[str, str]]:
 @mcp.tool()
 def get_total_mps() -> int:
     """Get the total number of Canadian Members of Parliament"""
-    return 225
+    return 1321
     
 @mcp.tool()
 def get_mp_phone_number(name: str) -> dict[str, Any]:
