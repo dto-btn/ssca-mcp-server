@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import json
 import math
+import os
 import re
 from dataclasses import dataclass
 
 try:
     from .config import OrchestratorSettings
+    from .logging_utils import get_logger
     from .schemas import RegistryModel, RegistryServer
 except ImportError:
     from config import OrchestratorSettings
+    from logging_utils import get_logger
     from schemas import RegistryModel, RegistryServer
 
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
+logger = get_logger("orchestrator.classifier")
 
 
 @dataclass
@@ -20,6 +25,7 @@ class CategoryMatch:
     confidence: float
     matched_keywords: list[str]
     raw_score: float
+    classification_method: str
 
 
 @dataclass
@@ -30,11 +36,122 @@ class ServerScore:
     matched_keywords: list[str]
     raw_score: float
     density: float
+    classification_method: str
 
 
 class LlmClassifierPlugin:
-    def classify_with_llm(self, messages: list[dict[str, str]]) -> dict[str, tuple[float, str]]:
-        return {}
+    def __init__(self, settings: OrchestratorSettings):
+        self.settings = settings
+        self._client = None
+        self._enabled = settings.enable_llm_classifier
+        if not self._enabled:
+            return
+        if not settings.azure_openai_endpoint or not settings.llm_model:
+            logger.warning(
+                "LLM classifier enabled but not configured (missing AZURE_OPENAI_ENDPOINT or ORCHESTRATOR_LLM_MODEL)."
+            )
+            return
+
+        try:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+            from openai import AzureOpenAI
+
+            tenant_hint = os.getenv("AZURE_TENANT_ID") or os.getenv("AZURE_AD_TENANT_ID")
+            client_hint = os.getenv("AZURE_CLIENT_ID") or os.getenv("AZURE_AD_CLIENT_ID")
+            if client_hint and client_hint.startswith("api://"):
+                client_hint = client_hint.removeprefix("api://")
+
+            credential_kwargs: dict[str, object] = {}
+            if tenant_hint:
+                credential_kwargs["shared_cache_tenant_id"] = tenant_hint
+                credential_kwargs["interactive_browser_tenant_id"] = tenant_hint
+            if client_hint and re.fullmatch(r"[0-9a-fA-F-]{32,36}", client_hint):
+                credential_kwargs["managed_identity_client_id"] = client_hint
+
+            credential = DefaultAzureCredential(**credential_kwargs)
+
+            token_provider = get_bearer_token_provider(
+                credential,
+                "https://cognitiveservices.azure.com/.default",
+            )
+
+            self._client = AzureOpenAI(
+                api_version=settings.azure_openai_api_version,
+                azure_endpoint=settings.azure_openai_endpoint,
+                azure_ad_token_provider=token_provider,
+                timeout=settings.llm_timeout_seconds,
+            )
+        except Exception:
+            logger.exception("Failed to initialize Azure OpenAI client for LLM classifier.")
+            self._client = None
+
+    def classify_with_llm(
+        self,
+        messages: list[dict[str, str]],
+        allowed_categories: list[str] | None = None,
+        server_context: list[dict[str, object]] | None = None,
+    ) -> dict[str, tuple[float, str]]:
+        if not self._enabled or self._client is None or not self.settings.llm_model:
+            return {}
+
+        candidate_categories = [category.strip().lower() for category in (allowed_categories or []) if category.strip()]
+        if "generic" not in candidate_categories:
+            candidate_categories.append("generic")
+
+        transcript_lines = []
+        for message in messages:
+            role = str(message.get("role", "user")).strip().lower()
+            content = str(message.get("content", "")).strip()
+            if not content:
+                continue
+            transcript_lines.append(f"{role}: {content}")
+
+        if not transcript_lines:
+            return {"generic": (1.0, "Empty message context")}
+
+        system_prompt = (
+            "You classify user intent into exactly one category. "
+            "Return strict JSON with keys: category (string), confidence (number 0..1), rationale (string). "
+            f"Only use one of these categories: {', '.join(candidate_categories)}. "
+            "If uncertain, choose generic."
+        )
+
+        server_context_json = "[]"
+        if server_context:
+            try:
+                server_context_json = json.dumps(server_context, ensure_ascii=False)
+            except Exception:
+                server_context_json = "[]"
+
+        try:
+            completion = self._client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Available MCP server context: {server_context_json}\n"
+                            f"Conversation:\n{'\n'.join(transcript_lines)}"
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_tokens=140,
+                response_format={"type": "json_object"},
+            )
+            content = (completion.choices[0].message.content or "{}").strip()
+            parsed = json.loads(content)
+            category = str(parsed.get("category", "generic")).strip().lower()
+            confidence = float(parsed.get("confidence", 0.0))
+            rationale = str(parsed.get("rationale", ""))
+            if category not in set(candidate_categories):
+                category = "generic"
+            confidence = max(0.0, min(1.0, confidence))
+            return {category: (confidence, rationale)}
+        except Exception:
+            logger.exception("LLM classification failed. Falling back to keyword classifier.")
+            return {}
 
 
 def normalize_text(text: str) -> str:
@@ -89,7 +206,89 @@ class KeywordClassifier:
         llm_plugin: LlmClassifierPlugin | None = None,
     ):
         self.settings = settings
-        self.llm_plugin = llm_plugin or LlmClassifierPlugin()
+        self.llm_plugin = llm_plugin or LlmClassifierPlugin(settings=settings)
+
+    def _collect_registry_categories(self, registry: RegistryModel) -> list[str]:
+        categories: set[str] = set()
+        for server in registry.mcp_servers:
+            for category in server.categories:
+                normalized = category.strip().lower()
+                if normalized:
+                    categories.add(normalized)
+        categories.add("generic")
+        return sorted(categories)
+
+    def _llm_top_category(
+        self,
+        messages: list[dict[str, str]],
+        registry: RegistryModel,
+    ) -> tuple[str, float, str] | None:
+        if not self.settings.enable_llm_classifier:
+            return None
+
+        allowed_categories = self._collect_registry_categories(registry)
+        server_context = [
+            {
+                "id": server.id,
+                "description": server.description,
+                "categories": server.categories,
+                "tools": server.tools,
+                "keywords": server.keywords[:10],
+            }
+            for server in registry.mcp_servers
+        ]
+        try:
+            llm_scores = self.llm_plugin.classify_with_llm(messages, allowed_categories, server_context)
+        except TypeError:
+            llm_scores = self.llm_plugin.classify_with_llm(messages)
+
+        if not llm_scores:
+            return None
+
+        category, (confidence, rationale) = max(llm_scores.items(), key=lambda item: item[1][0])
+        return category.strip().lower(), float(confidence), rationale
+
+    def _score_servers_from_llm_category(
+        self,
+        registry: RegistryModel,
+        category: str,
+        llm_confidence: float,
+    ) -> list[ServerScore]:
+        normalized_category = resolve_alias(category, registry.category_aliases)
+        if normalized_category in {"generic", "general"}:
+            return []
+
+        matched_servers: list[RegistryServer] = []
+        for server in registry.mcp_servers:
+            server_categories = {value.strip().lower() for value in server.categories}
+            if normalized_category in server_categories:
+                matched_servers.append(server)
+
+        if not matched_servers:
+            return []
+
+        max_weight = max((server.weight for server in matched_servers), default=1.0)
+        if max_weight <= 0:
+            max_weight = 1.0
+
+        scores: list[ServerScore] = []
+        for server in matched_servers:
+            weight_factor = server.weight / max_weight
+            confidence = max(0.0, min(1.0, (0.85 * llm_confidence) + (0.15 * weight_factor)))
+            scores.append(
+                ServerScore(
+                    server=server,
+                    category=normalized_category,
+                    confidence=confidence,
+                    matched_keywords=[f"llm:{normalized_category}"],
+                    raw_score=weight_factor,
+                    density=0.0,
+                    classification_method="ai",
+                )
+            )
+
+        scores.sort(key=lambda item: (item.confidence, item.server.weight), reverse=True)
+        return scores
 
     def _truncate_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
         trimmed = messages[-self.settings.max_messages :]
@@ -112,6 +311,13 @@ class KeywordClassifier:
         scoped_messages = self._truncate_messages(messages)
         if not scoped_messages:
             return []
+
+        llm_choice = self._llm_top_category(scoped_messages, registry)
+        if llm_choice:
+            llm_category, llm_confidence, _llm_rationale = llm_choice
+            llm_scores = self._score_servers_from_llm_category(registry, llm_category, llm_confidence)
+            if llm_scores and llm_confidence >= self.settings.min_confidence:
+                return llm_scores
 
         per_server_score: dict[str, float] = {}
         per_server_keywords: dict[str, list[str]] = {}
@@ -147,13 +353,6 @@ class KeywordClassifier:
             category = server.categories[0].lower() if server.categories else "general"
             by_category[category] = max(by_category.get(category, 0.0), raw / max_raw)
 
-        if self.settings.enable_llm_classifier:
-            llm_scores = self.llm_plugin.classify_with_llm(scoped_messages)
-            alpha = self.settings.llm_blend_alpha
-            for category, (llm_conf, _rationale) in llm_scores.items():
-                existing = by_category.get(category, 0.0)
-                by_category[category] = ((1 - alpha) * existing) + (alpha * llm_conf)
-
         scores: list[ServerScore] = []
         for server in registry.mcp_servers:
             raw = per_server_score.get(server.id, 0.0)
@@ -175,6 +374,7 @@ class KeywordClassifier:
                     matched_keywords=per_server_keywords.get(server.id, []),
                     raw_score=normalized_score,
                     density=density,
+                    classification_method="keyword",
                 )
             )
 
@@ -202,6 +402,7 @@ class KeywordClassifier:
                 confidence=score.confidence,
                 matched_keywords=score.matched_keywords,
                 raw_score=score.raw_score,
+                classification_method=score.classification_method,
             )
             for category, score in best_by_category.items()
         ]

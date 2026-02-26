@@ -29,6 +29,13 @@ def _to_float(value: str | None, default: float) -> float:
         return default
 
 
+def _first_non_empty(*values: str | None) -> str | None:
+    for value in values:
+        if value is not None and value.strip():
+            return value.strip()
+    return None
+
+
 @dataclass(frozen=True)
 class OrchestratorSettings:
     registry_path: Path
@@ -36,6 +43,10 @@ class OrchestratorSettings:
     min_confidence: float
     enable_llm_classifier: bool
     llm_blend_alpha: float
+    azure_openai_endpoint: str | None
+    azure_openai_api_version: str
+    llm_model: str | None
+    llm_timeout_seconds: float
     verbose_logging: bool
     redact_sensitive_tokens: bool
     max_message_chars: int
@@ -59,6 +70,14 @@ def load_settings() -> OrchestratorSettings:
         min_confidence=max(0.0, min(1.0, _to_float(os.getenv("ORCHESTRATOR_MIN_CONFIDENCE"), 0.4))),
         enable_llm_classifier=_to_bool(os.getenv("ENABLE_LLM_CLASSIFIER"), False),
         llm_blend_alpha=llm_blend_alpha,
+        azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        azure_openai_api_version=os.getenv("AZURE_OPENAI_VERSION", "2024-05-01-preview"),
+        llm_model=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LLM_MODEL"),
+            os.getenv("GPT40_DEPLOYMENT_NAME"),
+            os.getenv("DEFAULT_DEPLOYMENT_NAME"),
+        ),
+        llm_timeout_seconds=max(1.0, _to_float(os.getenv("ORCHESTRATOR_LLM_TIMEOUT_SECONDS"), 8.0)),
         verbose_logging=_to_bool(os.getenv("VERBOSE_LOGGING"), False),
         redact_sensitive_tokens=_to_bool(os.getenv("ORCHESTRATOR_REDACT_SENSITIVE"), True),
         max_message_chars=max(200, _to_int(os.getenv("ORCHESTRATOR_MAX_MESSAGE_CHARS"), 4000)),

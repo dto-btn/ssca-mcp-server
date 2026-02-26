@@ -18,6 +18,7 @@ class RoutingRules(BaseModel):
 class RegistryServer(BaseModel):
     id: str = Field(min_length=1)
     endpoint: str = Field(min_length=1)
+    description: str = ""
     categories: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
@@ -27,6 +28,11 @@ class RegistryServer(BaseModel):
     @classmethod
     def _strip_values(cls, values: list[str]) -> list[str]:
         return [value.strip() for value in values if value and value.strip()]
+
+    @field_validator("description")
+    @classmethod
+    def _strip_description(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("endpoint")
     @classmethod

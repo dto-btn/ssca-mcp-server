@@ -53,27 +53,31 @@ class OrchestratorRouter:
                         "name": fallback_category,
                         "confidence": 0.0,
                         "matched_keywords": [],
+                        "classification_method": "fallback",
                     }
                 ]
                 explanation = (
                     "No category had enough keyword evidence. "
                     f"Fallback selected: {fallback_message}"
                 )
+                classification_method = "fallback"
             else:
                 categories_data = [
                     {
                         "name": cat.name,
                         "confidence": round(cat.confidence, 4),
                         "matched_keywords": cat.matched_keywords,
+                        "classification_method": cat.classification_method,
                     }
                     for cat in categories
                 ]
                 top = categories[0]
+                classification_method = top.classification_method
                 uncertainty = ""
                 if top.confidence < self.settings.min_confidence:
                     uncertainty = " Confidence is low; ask a clarifying question."
                 explanation = (
-                    f"Top category '{top.name}' selected based on keyword matches: "
+                    f"Top category '{top.name}' selected via {top.classification_method} classification with evidence: "
                     f"{', '.join(top.matched_keywords[:5]) or 'none'}.{uncertainty}"
                 )
 
@@ -86,6 +90,7 @@ class OrchestratorRouter:
             return {
                 "categories": categories_data,
                 "explanation": explanation,
+                "classification_method": classification_method,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         except Exception as error:
@@ -129,6 +134,7 @@ class OrchestratorRouter:
                 return {
                     "recommendations": [],
                     "fallback": fallback,
+                    "classification_method": "fallback",
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
 
@@ -161,12 +167,16 @@ class OrchestratorRouter:
                         "category": normalized_category,
                         "confidence": round(item.confidence, 4),
                         "matched_keywords": item.matched_keywords,
+                        "classification_method": item.classification_method,
                         "rationale": rationale,
                     }
                 )
 
             response: dict[str, object] = {
                 "recommendations": recommendations,
+                "classification_method": (
+                    str(recommendations[0].get("classification_method")) if recommendations else "fallback"
+                ),
                 "plan": None,
                 "timestamp": datetime.now(UTC).isoformat(),
             }

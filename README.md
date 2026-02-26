@@ -6,6 +6,7 @@ It does **not** depend on `categoryService.info`.
 
 ## Features
 
+- LLM-first context classification (Azure OpenAI) with keyword fallback.
 - Keyword/regex-style context classification with recency, density, and weighting.
 - Ranked route suggestions across registered MCP servers.
 - Safe fallback with clarifying question suggestions.
@@ -195,11 +196,39 @@ If missing, the file is auto-created with empty `mcp_servers` and sensible routi
 
 ## Configuration
 
+Quick start:
+
+```bash
+cp .env.example .env
+```
+
+Use the same Azure OpenAI settings as SSC Assistant API:
+
+- Copy `AZURE_OPENAI_ENDPOINT` from `ssc-assistant/app/api/.env`
+- Copy deployment name(s): `GPT40_DEPLOYMENT_NAME` and/or `DEFAULT_DEPLOYMENT_NAME`
+- Copy `AZURE_AD_TENANT_ID` (and optionally `AZURE_AD_CLIENT_ID`) for the same Azure tenant context
+- Optionally set `ORCHESTRATOR_LLM_MODEL` to override deployment selection
+
+Authentication (orchestrator runs with its own credential context):
+
+- Local dev (recommended):
+
+```bash
+az login --use-device-code
+```
+
+- CI/service principal (optional): set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`
+- SSC Assistant naming is also accepted: `AZURE_AD_TENANT_ID`, `AZURE_AD_CLIENT_ID`
+
 - `ORCHESTRATOR_REGISTRY_PATH` (default: `./mcp_registry.json`)
 - `ORCHESTRATOR_MAX_MESSAGES` (default: `10`)
 - `ORCHESTRATOR_MIN_CONFIDENCE` (default: `0.4`)
 - `ENABLE_LLM_CLASSIFIER` (default: `false`)
 - `ORCHESTRATOR_LLM_BLEND_ALPHA` (default: `0.35`)
+- `AZURE_OPENAI_ENDPOINT` (required when `ENABLE_LLM_CLASSIFIER=true`)
+- `AZURE_OPENAI_VERSION` (default: `2024-05-01-preview`)
+- `ORCHESTRATOR_LLM_MODEL` (Azure deployment name; optional if `GPT40_DEPLOYMENT_NAME` or `DEFAULT_DEPLOYMENT_NAME` is set)
+- `ORCHESTRATOR_LLM_TIMEOUT_SECONDS` (default: `8.0`)
 - `VERBOSE_LOGGING` (default: `false`)
 - `ORCHESTRATOR_REDACT_SENSITIVE` (default: `true`)
 - `ORCHESTRATOR_MAX_MESSAGE_CHARS` (default: `4000`)
@@ -240,7 +269,12 @@ Coverage includes:
 - Add aliases in `category_aliases`.
 - Optional LLM classification:
 	- set `ENABLE_LLM_CLASSIFIER=true`
-	- implement a custom classifier class with `classify_with_llm(messages)` returning category confidence map.
+	- configure `AZURE_OPENAI_ENDPOINT` and `ORCHESTRATOR_LLM_MODEL`
+	- flow: LLM chooses category first; if it returns `generic` (or low confidence/error), keyword scoring runs; if keywords still do not match, the final fallback category remains `generic`.
+
+Notes:
+	- The orchestrator uses Azure Identity `DefaultAzureCredential` for Azure OpenAI tokens, matching SSC Assistant API behavior.
+	- Directly reusing browser MSAL session storage from `app/frontend` is not supported across processes; use shared Azure env settings and identity context instead.
 
 ## Documentation
 

@@ -33,6 +33,37 @@ router = OrchestratorRouter(settings=settings, registry_store=store)
 mcp = FastMCP("Orchestrator MCP Server")
 
 
+def _log_startup_config_summary() -> None:
+    if not settings.enable_llm_classifier:
+        logger.info("LLM classifier disabled; routing uses keyword classification and generic fallback.")
+        return
+
+    missing: list[str] = []
+    if not settings.azure_openai_endpoint:
+        missing.append("AZURE_OPENAI_ENDPOINT")
+    if not settings.llm_model:
+        missing.append("ORCHESTRATOR_LLM_MODEL")
+
+    if missing:
+        logger.warning(
+            "LLM classifier enabled but configuration is incomplete (missing=%s). "
+            "Orchestrator will fall back to keyword classification.",
+            ",".join(missing),
+        )
+        return
+
+    logger.info(
+        "LLM classifier enabled (model=%s, api_version=%s, timeout_seconds=%.1f, min_confidence=%.2f).",
+        settings.llm_model,
+        settings.azure_openai_api_version,
+        settings.llm_timeout_seconds,
+        settings.min_confidence,
+    )
+
+
+_log_startup_config_summary()
+
+
 def _allowed_origins_from_env() -> list[str]:
     raw = os.getenv(
         "ORCHESTRATOR_ALLOWED_ORIGINS",

@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -f "$ROOT_DIR/.env" ]]; then
+	set -a
+	# shellcheck disable=SC1091
+	source "$ROOT_DIR/.env"
+	set +a
+fi
+
 DEFAULT_CERT_FILE="$ROOT_DIR/certs/localhost.crt"
 DEFAULT_KEY_FILE="$ROOT_DIR/certs/localhost.key"
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from server.classifier import KeywordClassifier, resolve_alias
+from server.classifier import KeywordClassifier, LlmClassifierPlugin, resolve_alias
 from server.config import OrchestratorSettings
 from server.registry import RegistryStore
 from server.router import OrchestratorRouter
@@ -16,6 +16,10 @@ def make_settings(registry_path: Path, *, hot_reload: bool = False) -> Orchestra
         min_confidence=0.4,
         enable_llm_classifier=False,
         llm_blend_alpha=0.35,
+        azure_openai_endpoint=None,
+        azure_openai_api_version="2024-05-01-preview",
+        llm_model=None,
+        llm_timeout_seconds=8.0,
         verbose_logging=False,
         redact_sensitive_tokens=True,
         max_message_chars=4000,
@@ -240,3 +244,49 @@ def test_hot_reload_registry(tmp_path: Path) -> None:
         assert second["recommendations"][0]["mcp_server_id"] != "calendar_mcp"
     else:
         assert "fallback" in second
+
+
+class StubLlmPlugin(LlmClassifierPlugin):
+    def __init__(self, result: dict[str, tuple[float, str]]):
+        self.result = result
+
+    def classify_with_llm(
+        self,
+        messages: list[dict[str, str]],
+        allowed_categories: list[str] | None = None,
+    ) -> dict[str, tuple[float, str]]:
+        return self.result
+
+
+def test_llm_first_pass_selects_category_without_keywords(tmp_path: Path) -> None:
+    _, store, _ = make_router(tmp_path)
+    llm_settings = make_settings(store.settings.registry_path)
+    llm_settings = OrchestratorSettings(**{**llm_settings.__dict__, "enable_llm_classifier": True})
+
+    classifier = KeywordClassifier(
+        llm_settings,
+        llm_plugin=StubLlmPlugin({"database": (0.91, "Detected SQL task")}),
+    )
+    registry = store.load_registry()
+
+    scores = classifier.score_servers(msg("please help"), registry)
+    assert scores
+    assert scores[0].server.id == "db_mcp"
+    assert scores[0].matched_keywords == ["llm:database"]
+
+
+def test_llm_generic_falls_back_to_keyword_scoring(tmp_path: Path) -> None:
+    _, store, _ = make_router(tmp_path)
+    llm_settings = make_settings(store.settings.registry_path)
+    llm_settings = OrchestratorSettings(**{**llm_settings.__dict__, "enable_llm_classifier": True})
+
+    classifier = KeywordClassifier(
+        llm_settings,
+        llm_plugin=StubLlmPlugin({"generic": (0.96, "Insufficient context")}),
+    )
+    registry = store.load_registry()
+
+    scores = classifier.score_servers(msg("Please schedule a meeting tomorrow at 10"), registry)
+    assert scores
+    assert scores[0].server.id == "calendar_mcp"
+    assert all(not keyword.startswith("llm:") for keyword in scores[0].matched_keywords)
