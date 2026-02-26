@@ -32,7 +32,7 @@
     },
     {
       "id": "geds_mcp",
-      "endpoint": "https://geds-mcp.example.com/mcp",
+      "endpoint": "https://geds-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
       "categories": ["geds", "directory", "employee"],
       "tools": ["find_employee", "lookup_contact", "get_org_chart"],
       "keywords": [
@@ -178,7 +178,7 @@
       "weight": 1.0
     },
     {
-      "id": "parliamentary_mcp",
+      "id": "cpMCP",
       "endpoint": "https://ssca-mcp-server.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
       "categories": ["parliamentary", "parliament", "cpmcp"],
       "tools": ["find_mp", "find_constituency", "get_parliamentary_role"],
@@ -228,7 +228,7 @@
     "max_recommendations": 3,
     "tie_breaker": "weight_then_keyword_density",
     "default_fallback": {
-      "category": "general",
+      "category": "generic",
       "message": "No clear match. Ask a clarifying question."
     }
   }

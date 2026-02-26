@@ -115,7 +115,10 @@ class OrchestratorRouter:
             max_recos = max_recommendations or registry.routing_rules.max_recommendations
 
             if not ranked:
+                fallback_category = registry.routing_rules.default_fallback.category
                 fallback = {
+                    "category": fallback_category,
+                    "upstream": None,
                     "reason": registry.routing_rules.default_fallback.message,
                     "suggestions_for_user": [
                         "Are you trying to query a database or search the web?",
@@ -219,6 +222,11 @@ class OrchestratorRouter:
         return {
             "status": "stub",
             "selected_mcp_server_id": selected,
+            "selected_category": (
+                str(routing["recommendations"][0]["category"])
+                if routing.get("recommendations")
+                else str((routing.get("fallback") or {}).get("category", "generic"))
+            ),
             "selected_tool": tool_name,
             "payload": payload or {},
             "plan": {

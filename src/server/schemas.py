@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 
 class DefaultFallback(BaseModel):
-    category: str = "general"
+    category: str = "generic"
     message: str = "No clear match. Ask a clarifying question."
 
 

@@ -68,7 +68,7 @@ def sample_registry_payload() -> dict:
             "max_recommendations": 3,
             "tie_breaker": "weight_then_keyword_density",
             "default_fallback": {
-                "category": "general",
+                "category": "generic",
                 "message": "No clear match. Ask a clarifying question.",
             },
         },
@@ -152,7 +152,7 @@ def test_empty_registry_fallback(tmp_path: Path) -> None:
                 "max_recommendations": 3,
                 "tie_breaker": "weight_then_keyword_density",
                 "default_fallback": {
-                    "category": "general",
+                    "category": "generic",
                     "message": "No clear match. Ask a clarifying question.",
                 },
             },
@@ -216,6 +216,14 @@ def test_low_confidence_single_best_triggers_disambiguation(tmp_path: Path) -> N
         assert "disambiguation_note" in result or result["recommendations"][0]["confidence"] >= 0.6
     else:
         assert "fallback" in result
+
+
+def test_unmatched_prompt_returns_generic_with_no_upstream(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+    result = router.suggest_route(msg("zzzz qqqq yyyyy"), require_single_best=True)
+    assert result["recommendations"] == []
+    assert result["fallback"]["category"] == "generic"
+    assert result["fallback"]["upstream"] is None
 
 
 def test_hot_reload_registry(tmp_path: Path) -> None:
