@@ -258,6 +258,20 @@ class StubLlmPlugin(LlmClassifierPlugin):
         return self.result
 
 
+class CountingStubLlmPlugin(LlmClassifierPlugin):
+    def __init__(self, result: dict[str, tuple[float, str]]):
+        self.result = result
+        self.calls = 0
+
+    def classify_with_llm(
+        self,
+        messages: list[dict[str, str]],
+        allowed_categories: list[str] | None = None,
+    ) -> dict[str, tuple[float, str]]:
+        self.calls += 1
+        return self.result
+
+
 def test_llm_first_pass_selects_category_without_keywords(tmp_path: Path) -> None:
     _, store, _ = make_router(tmp_path)
     llm_settings = make_settings(store.settings.registry_path)
@@ -290,3 +304,29 @@ def test_llm_generic_falls_back_to_keyword_scoring(tmp_path: Path) -> None:
     assert scores
     assert scores[0].server.id == "calendar_mcp"
     assert all(not keyword.startswith("llm:") for keyword in scores[0].matched_keywords)
+
+
+def test_classify_and_suggest_returns_category_and_routes(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+    result = router.classify_and_suggest(msg("Run an SQL query to list users"), max_recommendations=3)
+
+    assert "categories" in result
+    assert "recommendations" in result
+    assert result["recommendations"]
+    assert result["recommendations"][0]["mcp_server_id"] == "db_mcp"
+
+
+def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:
+    _, store, _ = make_router(tmp_path)
+    llm_settings = make_settings(store.settings.registry_path)
+    llm_settings = OrchestratorSettings(**{**llm_settings.__dict__, "enable_llm_classifier": True})
+
+    counting_stub = CountingStubLlmPlugin({"database": (0.9, "Detected SQL task")})
+    classifier = KeywordClassifier(llm_settings, llm_plugin=counting_stub)
+    router = OrchestratorRouter(settings=llm_settings, registry_store=store)
+    router.classifier = classifier
+
+    result = router.classify_and_suggest(msg("Please help with SQL"), max_recommendations=3)
+
+    assert "recommendations" in result
+    assert counting_stub.calls == 1

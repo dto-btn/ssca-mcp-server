@@ -35,6 +35,129 @@ class OrchestratorRouter:
             normalized.append({"role": str(role), "content": content})
         return normalized
 
+    def _build_category_response(
+        self,
+        ranked: list,
+        registry,
+    ) -> tuple[list[dict[str, object]], str, str]:
+        if not ranked:
+            fallback_category = registry.routing_rules.default_fallback.category
+            fallback_message = registry.routing_rules.default_fallback.message
+            categories_data = [
+                {
+                    "name": fallback_category,
+                    "confidence": 0.0,
+                    "matched_keywords": [],
+                    "classification_method": "fallback",
+                }
+            ]
+            explanation = (
+                "No category had enough keyword evidence. "
+                f"Fallback selected: {fallback_message}"
+            )
+            return categories_data, "fallback", explanation
+
+        best_by_category: dict[str, object] = {}
+        for item in ranked:
+            existing = best_by_category.get(item.category)
+            if existing is None or item.confidence > existing.confidence:
+                best_by_category[item.category] = item
+
+        categories_data = [
+            {
+                "name": category,
+                "confidence": round(score.confidence, 4),
+                "matched_keywords": score.matched_keywords,
+                "classification_method": score.classification_method,
+            }
+            for category, score in best_by_category.items()
+        ]
+        categories_data.sort(key=lambda item: float(item["confidence"]), reverse=True)
+
+        top = categories_data[0]
+        top_confidence = float(top["confidence"])
+        uncertainty = ""
+        if top_confidence < self.settings.min_confidence:
+            uncertainty = " Confidence is low; ask a clarifying question."
+        explanation = (
+            f"Top category '{top['name']}' selected via {top['classification_method']} classification with evidence: "
+            f"{', '.join(top['matched_keywords'][:5]) or 'none'}.{uncertainty}"
+        )
+        return categories_data, str(top["classification_method"]), explanation
+
+    def _build_route_response(
+        self,
+        ranked: list,
+        registry,
+        max_recommendations: int,
+        require_single_best: bool,
+    ) -> dict[str, object]:
+        if not ranked:
+            fallback_category = registry.routing_rules.default_fallback.category
+            fallback = {
+                "category": fallback_category,
+                "upstream": None,
+                "reason": registry.routing_rules.default_fallback.message,
+                "suggestions_for_user": [
+                    "Are you trying to query a database or search the web?",
+                    "Do you want help with calendar scheduling?",
+                    "Can you share the main action you want to perform?",
+                ],
+            }
+            return {
+                "recommendations": [],
+                "fallback": fallback,
+                "classification_method": "fallback",
+            }
+
+        top_conf = ranked[0].confidence
+        tie_delta = 0.05
+        filtered: list = []
+        for item in ranked:
+            if len(filtered) >= max_recommendations:
+                break
+            if top_conf - item.confidence <= tie_delta or len(filtered) == 0:
+                filtered.append(item)
+
+        if require_single_best:
+            filtered = filtered[:1]
+
+        recommendations = []
+        for item in filtered:
+            normalized_category = resolve_alias(item.category, registry.category_aliases)
+            rationale = (
+                f"Matched keywords: {', '.join(item.matched_keywords[:5]) or 'none'}; "
+                f"weighted confidence={item.confidence:.3f}."
+            )
+            if require_single_best and item.confidence < 0.6:
+                rationale += " Confidence below 0.6; disambiguation recommended."
+
+            recommendations.append(
+                {
+                    "mcp_server_id": item.server.id,
+                    "endpoint": item.server.endpoint,
+                    "category": normalized_category,
+                    "confidence": round(item.confidence, 4),
+                    "matched_keywords": item.matched_keywords,
+                    "classification_method": item.classification_method,
+                    "rationale": rationale,
+                }
+            )
+
+        response: dict[str, object] = {
+            "recommendations": recommendations,
+            "classification_method": (
+                str(recommendations[0].get("classification_method")) if recommendations else "fallback"
+            ),
+            "plan": None,
+        }
+
+        if require_single_best and recommendations and recommendations[0]["confidence"] < 0.6:
+            response["disambiguation_note"] = (
+                "Top route has low confidence. Ask whether user wants web search, DB operation, or calendar action."
+            )
+        return response
+
     def classify_context(
         self,
         messages: list[object],
@@ -44,42 +167,8 @@ class OrchestratorRouter:
         normalized = self._normalize_messages(messages)
         try:
             registry = self.registry_store.load_registry()
-            categories = self.classifier.classify_categories(normalized, registry)
-            if not categories:
-                fallback_category = registry.routing_rules.default_fallback.category
-                fallback_message = registry.routing_rules.default_fallback.message
-                categories_data = [
-                    {
-                        "name": fallback_category,
-                        "confidence": 0.0,
-                        "matched_keywords": [],
-                        "classification_method": "fallback",
-                    }
-                ]
-                explanation = (
-                    "No category had enough keyword evidence. "
-                    f"Fallback selected: {fallback_message}"
-                )
-                classification_method = "fallback"
-            else:
-                categories_data = [
-                    {
-                        "name": cat.name,
-                        "confidence": round(cat.confidence, 4),
-                        "matched_keywords": cat.matched_keywords,
-                        "classification_method": cat.classification_method,
-                    }
-                    for cat in categories
-                ]
-                top = categories[0]
-                classification_method = top.classification_method
-                uncertainty = ""
-                if top.confidence < self.settings.min_confidence:
-                    uncertainty = " Confidence is low; ask a clarifying question."
-                explanation = (
-                    f"Top category '{top.name}' selected via {top.classification_method} classification with evidence: "
-                    f"{', '.join(top.matched_keywords[:5]) or 'none'}.{uncertainty}"
-                )
+            ranked = self.classifier.score_servers(normalized, registry)
+            categories_data, classification_method, explanation = self._build_category_response(ranked, registry)
 
             if self.settings.verbose_logging:
                 snippet = " ".join(msg["content"][:120] for msg in normalized)
@@ -118,80 +207,20 @@ class OrchestratorRouter:
             registry = self.registry_store.load_registry()
             ranked = self.classifier.score_servers(normalized, registry)
             max_recos = max_recommendations or registry.routing_rules.max_recommendations
-
-            if not ranked:
-                fallback_category = registry.routing_rules.default_fallback.category
-                fallback = {
-                    "category": fallback_category,
-                    "upstream": None,
-                    "reason": registry.routing_rules.default_fallback.message,
-                    "suggestions_for_user": [
-                        "Are you trying to query a database or search the web?",
-                        "Do you want help with calendar scheduling?",
-                        "Can you share the main action you want to perform?",
-                    ],
-                }
-                return {
-                    "recommendations": [],
-                    "fallback": fallback,
-                    "classification_method": "fallback",
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }
-
-            top_conf = ranked[0].confidence
-            tie_delta = 0.05
-            filtered: list = []
-            for item in ranked:
-                if len(filtered) >= max_recos:
-                    break
-                if top_conf - item.confidence <= tie_delta or len(filtered) == 0:
-                    filtered.append(item)
-
-            if require_single_best:
-                filtered = filtered[:1]
-
-            recommendations = []
-            for item in filtered:
-                normalized_category = resolve_alias(item.category, registry.category_aliases)
-                rationale = (
-                    f"Matched keywords: {', '.join(item.matched_keywords[:5]) or 'none'}; "
-                    f"weighted confidence={item.confidence:.3f}."
-                )
-                if require_single_best and item.confidence < 0.6:
-                    rationale += " Confidence below 0.6; disambiguation recommended."
-
-                recommendations.append(
-                    {
-                        "mcp_server_id": item.server.id,
-                        "endpoint": item.server.endpoint,
-                        "category": normalized_category,
-                        "confidence": round(item.confidence, 4),
-                        "matched_keywords": item.matched_keywords,
-                        "classification_method": item.classification_method,
-                        "rationale": rationale,
-                    }
-                )
-
-            response: dict[str, object] = {
-                "recommendations": recommendations,
-                "classification_method": (
-                    str(recommendations[0].get("classification_method")) if recommendations else "fallback"
-                ),
-                "plan": None,
-                "timestamp": datetime.now(UTC).isoformat(),
-            }
-
-            if require_single_best and recommendations and recommendations[0]["confidence"] < 0.6:
-                response["disambiguation_note"] = (
-                    "Top route has low confidence. Ask whether user wants web search, DB operation, or calendar action."
-                )
+            response = self._build_route_response(
+                ranked=ranked,
+                registry=registry,
+                max_recommendations=max_recos,
+                require_single_best=require_single_best,
+            )
+            response["timestamp"] = datetime.now(UTC).isoformat()
 
             if self.settings.verbose_logging:
                 logger.info(
                     "Routing complete locale=%s metadata=%s recommendation_count=%s",
                     locale,
                     metadata or {},
-                    len(recommendations),
+                    len(response.get("recommendations", [])),
                 )
             return response
         except Exception as error:
@@ -204,6 +233,73 @@ class OrchestratorRouter:
                 },
                 "error": {
                     "code": "routing_failed",
+                    "message": str(error),
+                },
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+
+    def classify_and_suggest(
+        self,
+        messages: list[object],
+        max_recommendations: int | None = None,
+        require_single_best: bool = False,
+        locale: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized = self._normalize_messages(messages)
+        try:
+            registry = self.registry_store.load_registry()
+            ranked = self.classifier.score_servers(normalized, registry)
+            max_recos = max_recommendations or registry.routing_rules.max_recommendations
+
+            categories_data, classification_method, explanation = self._build_category_response(ranked, registry)
+            route_response = self._build_route_response(
+                ranked=ranked,
+                registry=registry,
+                max_recommendations=max_recos,
+                require_single_best=require_single_best,
+            )
+
+            response: dict[str, object] = {
+                "categories": categories_data,
+                "explanation": explanation,
+                "classification_method": (
+                    str(route_response.get("classification_method"))
+                    if route_response.get("classification_method")
+                    else classification_method
+                ),
+                "recommendations": route_response.get("recommendations", []),
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+
+            if "fallback" in route_response:
+                response["fallback"] = route_response["fallback"]
+            if "plan" in route_response:
+                response["plan"] = route_response["plan"]
+            if "disambiguation_note" in route_response:
+                response["disambiguation_note"] = route_response["disambiguation_note"]
+
+            if self.settings.verbose_logging:
+                logger.info(
+                    "Classify+route complete locale=%s metadata=%s recommendation_count=%s",
+                    locale,
+                    metadata or {},
+                    len(response.get("recommendations", [])),
+                )
+
+            return response
+        except Exception as error:
+            logger.exception("classify_and_suggest failed")
+            return {
+                "categories": [],
+                "recommendations": [],
+                "fallback": {
+                    "category": "generic",
+                    "reason": "Classification and routing failed due to a server-side error.",
+                    "upstream": None,
+                },
+                "error": {
+                    "code": "classify_and_suggest_failed",
                     "message": str(error),
                 },
                 "timestamp": datetime.now(UTC).isoformat(),

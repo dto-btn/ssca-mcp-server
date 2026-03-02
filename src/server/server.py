@@ -102,6 +102,14 @@ class SuggestRouteInput(BaseModel):
     metadata: dict[str, object] | None = None
 
 
+class ClassifyAndSuggestInput(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1)
+    max_recommendations: int | None = Field(default=None, ge=1, le=10)
+    require_single_best: bool = False
+    locale: str | None = None
+    metadata: dict[str, object] | None = None
+
+
 class RouteAndForwardInput(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
     target_mcp_server_id: str | None = None
@@ -175,6 +183,42 @@ def suggest_route(
         }
 
     return router.suggest_route(
+        payload.messages,
+        max_recommendations=payload.max_recommendations,
+        require_single_best=payload.require_single_best,
+        locale=payload.locale,
+        metadata=payload.metadata,
+    )
+
+
+@mcp.tool()
+def classify_and_suggest(
+    messages: list[dict[str, str]],
+    max_recommendations: int | None = None,
+    require_single_best: bool = False,
+    locale: str | None = None,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Single-pass classification + route suggestion using one scoring run."""
+    try:
+        payload = ClassifyAndSuggestInput(
+            messages=[ChatMessage(**m) for m in messages],
+            max_recommendations=max_recommendations,
+            require_single_best=require_single_best,
+            locale=locale,
+            metadata=metadata,
+        )
+    except Exception as error:
+        return {
+            "error": {
+                "code": "invalid_input",
+                "message": "Malformed classify_and_suggest input",
+                "details": str(error),
+            },
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+    return router.classify_and_suggest(
         payload.messages,
         max_recommendations=payload.max_recommendations,
         require_single_best=payload.require_single_best,
