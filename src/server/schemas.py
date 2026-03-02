@@ -27,16 +27,19 @@ class RegistryServer(BaseModel):
     @field_validator("categories", "tools", "keywords")
     @classmethod
     def _strip_values(cls, values: list[str]) -> list[str]:
+        """Trim list entries and drop empty values."""
         return [value.strip() for value in values if value and value.strip()]
 
     @field_validator("description")
     @classmethod
     def _strip_description(cls, value: str) -> str:
+        """Normalize description whitespace."""
         return value.strip()
 
     @field_validator("endpoint")
     @classmethod
     def _require_https_endpoint(cls, endpoint: str) -> str:
+        """Validate endpoint transport/security and MCP path contract."""
         normalized = endpoint.strip()
         parsed = urlparse(normalized)
         host = (parsed.hostname or "").lower()
@@ -61,6 +64,7 @@ class RegistryModel(BaseModel):
     @field_validator("category_aliases")
     @classmethod
     def _normalize_aliases(cls, aliases: dict[str, str]) -> dict[str, str]:
+        """Normalize alias map to lowercase canonical keys/values."""
         normalized: dict[str, str] = {}
         for key, value in aliases.items():
             k = key.strip().lower()
@@ -71,4 +75,5 @@ class RegistryModel(BaseModel):
 
 
 def default_registry() -> RegistryModel:
+    """Return an empty but valid default registry document."""
     return RegistryModel()

@@ -21,6 +21,11 @@ logger = get_logger("orchestrator.registry")
 
 @contextmanager
 def _lock_file(lock_path: Path) -> Iterator[None]:
+    """Acquire an inter-process file lock for registry read/write operations.
+
+    On platforms without ``fcntl`` the function degrades gracefully to a best-
+    effort lock by still creating/opening the lock file.
+    """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
@@ -43,6 +48,7 @@ def _lock_file(lock_path: Path) -> Iterator[None]:
 
 class RegistryStore:
     def __init__(self, settings: OrchestratorSettings):
+        """Store and cache orchestrator registry configuration from disk."""
         self.settings = settings
         self._cached_registry: RegistryModel | None = None
         self._cached_mtime: tuple[int, int] | None = None
@@ -56,6 +62,7 @@ class RegistryStore:
         return self.registry_path.with_suffix(self.registry_path.suffix + ".lock")
 
     def _read_registry_from_disk(self) -> RegistryModel:
+        """Read registry JSON from disk, creating defaults when missing."""
         if not self.registry_path.exists():
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
             defaults = default_registry()
@@ -67,6 +74,7 @@ class RegistryStore:
         return RegistryModel.model_validate(parsed)
 
     def load_registry(self) -> RegistryModel:
+        """Load registry with optional hot-reload based on file mtime/size."""
         with _lock_file(self.lock_path):
             if self.settings.enable_hot_reload:
                 if self.registry_path.exists():
@@ -74,6 +82,7 @@ class RegistryStore:
                     current_mtime = (stat.st_mtime_ns, stat.st_size)
                 else:
                     current_mtime = None
+                # Re-read only when cache is empty or file fingerprint changed.
                 if self._cached_registry is None or self._cached_mtime != current_mtime:
                     registry = self._read_registry_from_disk()
                     self._cached_registry = registry
@@ -90,6 +99,7 @@ class RegistryStore:
             return registry
 
     def save_registry(self, registry: RegistryModel) -> RegistryModel:
+        """Persist registry to disk and refresh in-memory cache metadata."""
         with _lock_file(self.lock_path):
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
             self.registry_path.write_text(json.dumps(registry.model_dump(mode="json"), indent=2), encoding="utf-8")
@@ -104,6 +114,11 @@ class RegistryStore:
         remove: list[str],
         provided_secret: str | None,
     ) -> RegistryModel:
+        """Apply authenticated upsert/remove updates to the registry.
+
+        Validation is enforced through ``RegistryServer`` model parsing before
+        writing the merged registry to disk.
+        """
         if not self.settings.update_registry_enabled:
             raise PermissionError("Registry update is disabled. Set ORCHESTRATOR_ENABLE_UPDATE_REGISTRY=true to enable it.")
         if self.settings.admin_secret and provided_secret != self.settings.admin_secret:

@@ -18,11 +18,13 @@ logger = get_logger("orchestrator.router")
 
 class OrchestratorRouter:
     def __init__(self, settings: OrchestratorSettings, registry_store: RegistryStore):
+        """Compose classification and registry services for routing operations."""
         self.settings = settings
         self.registry_store = registry_store
         self.classifier = KeywordClassifier(settings=settings)
 
     def _normalize_messages(self, messages: list[object]) -> list[dict[str, str]]:
+        """Normalize mixed message objects/dicts into ``{role, content}`` records."""
         normalized: list[dict[str, str]] = []
         for message in messages:
             role = getattr(message, "role", None)
@@ -40,6 +42,7 @@ class OrchestratorRouter:
         ranked: list,
         registry,
     ) -> tuple[list[dict[str, object]], str, str]:
+        """Build category-oriented output with explanation text for callers."""
         if not ranked:
             fallback_category = registry.routing_rules.default_fallback.category
             fallback_message = registry.routing_rules.default_fallback.message
@@ -59,6 +62,7 @@ class OrchestratorRouter:
 
         best_by_category: dict[str, object] = {}
         for item in ranked:
+            # Preserve only the strongest server evidence for each category.
             existing = best_by_category.get(item.category)
             if existing is None or item.confidence > existing.confidence:
                 best_by_category[item.category] = item
@@ -92,6 +96,11 @@ class OrchestratorRouter:
         max_recommendations: int,
         require_single_best: bool,
     ) -> dict[str, object]:
+        """Build downstream route recommendations from ranked server scores.
+
+        The response includes fallback guidance when there is no reliable match,
+        and optional disambiguation hints when confidence is low.
+        """
         if not ranked:
             fallback_category = registry.routing_rules.default_fallback.category
             fallback = {
@@ -116,6 +125,7 @@ class OrchestratorRouter:
         for item in ranked:
             if len(filtered) >= max_recommendations:
                 break
+            # Keep near-ties so the caller can decide whether to disambiguate.
             if top_conf - item.confidence <= tie_delta or len(filtered) == 0:
                 filtered.append(item)
 
@@ -164,6 +174,7 @@ class OrchestratorRouter:
         locale: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """Classify conversation messages into categories with confidence."""
         normalized = self._normalize_messages(messages)
         try:
             registry = self.registry_store.load_registry()
@@ -202,6 +213,7 @@ class OrchestratorRouter:
         locale: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """Recommend MCP targets for the current conversation context."""
         normalized = self._normalize_messages(messages)
         try:
             registry = self.registry_store.load_registry()
@@ -246,6 +258,7 @@ class OrchestratorRouter:
         locale: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """Run one scoring pass and return both category and route outputs."""
         normalized = self._normalize_messages(messages)
         try:
             registry = self.registry_store.load_registry()
@@ -314,6 +327,11 @@ class OrchestratorRouter:
         locale: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """Return route selection plus a placeholder forward-plan payload.
+
+        This intentionally does not execute downstream MCP calls yet; it surfaces
+        the selected route and a deterministic envelope for future expansion.
+        """
         routing = self.suggest_route(
             messages=messages,
             max_recommendations=1,

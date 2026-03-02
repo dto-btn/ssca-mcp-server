@@ -6,12 +6,14 @@ from pathlib import Path
 
 
 def _to_bool(value: str | None, default: bool = False) -> bool:
+    """Parse common environment truthy values into bool."""
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _to_int(value: str | None, default: int) -> int:
+    """Parse integer env var and fall back to default on invalid input."""
     if value is None:
         return default
     try:
@@ -21,6 +23,7 @@ def _to_int(value: str | None, default: int) -> int:
 
 
 def _to_float(value: str | None, default: float) -> float:
+    """Parse float env var and fall back to default on invalid input."""
     if value is None:
         return default
     try:
@@ -30,6 +33,7 @@ def _to_float(value: str | None, default: float) -> float:
 
 
 def _first_non_empty(*values: str | None) -> str | None:
+    """Return the first non-empty string from a precedence chain."""
     for value in values:
         if value is not None and value.strip():
             return value.strip()
@@ -57,6 +61,7 @@ class OrchestratorSettings:
 
 
 def load_settings() -> OrchestratorSettings:
+    """Load orchestrator settings from environment with safe bounds."""
     registry_path = Path(os.getenv("ORCHESTRATOR_REGISTRY_PATH", "./mcp_registry.json")).expanduser().resolve()
     llm_blend_alpha = _to_float(os.getenv("ORCHESTRATOR_LLM_BLEND_ALPHA"), 0.35)
     if llm_blend_alpha < 0:

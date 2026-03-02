@@ -12,6 +12,7 @@ SENSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def get_logger(name: str) -> logging.Logger:
+    """Return a module logger configured with a default stream handler."""
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler()
@@ -23,6 +24,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def redact_text(text: str) -> str:
+    """Redact common sensitive patterns before writing logs."""
     redacted = text
     for pattern in SENSITIVE_PATTERNS:
         redacted = pattern.sub("[REDACTED]", redacted)

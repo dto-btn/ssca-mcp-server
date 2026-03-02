@@ -41,6 +41,12 @@ class ServerScore:
 
 class LlmClassifierPlugin:
     def __init__(self, settings: OrchestratorSettings):
+        """Initialize Azure OpenAI client state used for intent category inference.
+
+        The plugin is intentionally resilient: configuration problems or SDK import
+        failures only disable LLM classification and allow deterministic keyword
+        routing to continue.
+        """
         self.settings = settings
         self._client = None
         self._enabled = settings.enable_llm_classifier
@@ -91,6 +97,12 @@ class LlmClassifierPlugin:
         allowed_categories: list[str] | None = None,
         server_context: list[dict[str, object]] | None = None,
     ) -> dict[str, tuple[float, str]]:
+        """Classify conversation intent into one category using Azure OpenAI.
+
+        Returns a map of ``category -> (confidence, rationale)`` to match the
+        existing keyword-classifier interface. If anything fails, the method
+        returns an empty result so callers can fall back to keyword scoring.
+        """
         if not self._enabled or self._client is None or not self.settings.llm_model:
             return {}
 
@@ -155,6 +167,7 @@ class LlmClassifierPlugin:
 
 
 def normalize_text(text: str) -> str:
+    """Normalize free text for keyword matching and tokenization."""
     lowered = text.lower()
     lowered = re.sub(r"[^a-z0-9\s]", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip()
@@ -162,6 +175,7 @@ def normalize_text(text: str) -> str:
 
 
 def simple_stem(token: str) -> str:
+    """Apply a light stemmer tuned for routing keywords."""
     for suffix in ("ing", "ed", "es", "s"):
         if token.endswith(suffix) and len(token) > len(suffix) + 2:
             return token[: -len(suffix)]
@@ -169,11 +183,13 @@ def simple_stem(token: str) -> str:
 
 
 def tokenize(text: str) -> list[str]:
+    """Tokenize normalized text and apply lightweight stemming."""
     tokens = WORD_PATTERN.findall(normalize_text(text))
     return [simple_stem(token) for token in tokens]
 
 
 def _match_keyword(normalized_text: str, keyword: str) -> bool:
+    """Return True if a keyword or phrase appears in normalized text."""
     key = normalize_text(keyword)
     if not key:
         return False
@@ -187,6 +203,7 @@ def _match_keyword(normalized_text: str, keyword: str) -> bool:
 
 
 def _recency_factor(index: int, total: int) -> float:
+    """Bias scoring toward newer conversation turns."""
     if total <= 1:
         return 1.0
     relative = index / (total - 1)
@@ -194,6 +211,7 @@ def _recency_factor(index: int, total: int) -> float:
 
 
 def _confidence_from_score(score: float, density: float) -> float:
+    """Convert weighted keyword evidence into calibrated confidence."""
     blended = (0.85 * score) + (0.15 * min(1.0, density * 10))
     confidence = 1 / (1 + math.exp(-((blended * 3.5) - 1.5)))
     return max(0.0, min(1.0, confidence))
@@ -209,6 +227,7 @@ class KeywordClassifier:
         self.llm_plugin = llm_plugin or LlmClassifierPlugin(settings=settings)
 
     def _collect_registry_categories(self, registry: RegistryModel) -> list[str]:
+        """Collect normalized categories available for classification."""
         categories: set[str] = set()
         for server in registry.mcp_servers:
             for category in server.categories:
@@ -223,6 +242,7 @@ class KeywordClassifier:
         messages: list[dict[str, str]],
         registry: RegistryModel,
     ) -> tuple[str, float, str] | None:
+        """Ask the LLM for the top category constrained by registry categories."""
         if not self.settings.enable_llm_classifier:
             return None
 
@@ -254,6 +274,11 @@ class KeywordClassifier:
         category: str,
         llm_confidence: float,
     ) -> list[ServerScore]:
+        """Translate one LLM category decision into ranked server scores.
+
+        This phase keeps LLM output bounded by server metadata by only scoring
+        servers that actually declare the selected category.
+        """
         normalized_category = resolve_alias(category, registry.category_aliases)
         if normalized_category in {"generic", "general"}:
             return []
@@ -291,6 +316,11 @@ class KeywordClassifier:
         return scores
 
     def _truncate_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Apply hard limits on context length before classification.
+
+        Guards both message count and aggregate character volume so classifier
+        performance remains predictable across large prompts.
+        """
         trimmed = messages[-self.settings.max_messages :]
         safe_messages: list[dict[str, str]] = []
         total_chars = 0
@@ -308,6 +338,13 @@ class KeywordClassifier:
         messages: list[dict[str, str]],
         registry: RegistryModel,
     ) -> list[ServerScore]:
+        """Rank candidate MCP servers from conversation context.
+
+        Strategy:
+        1) Try LLM-based single-category routing.
+        2) If confidence is low or unavailable, run deterministic keyword scoring.
+        3) Convert raw scores to calibrated confidence and sort descending.
+        """
         scoped_messages = self._truncate_messages(messages)
         if not scoped_messages:
             return []
@@ -331,6 +368,7 @@ class KeywordClassifier:
 
             for server in registry.mcp_servers:
                 for keyword in server.keywords:
+                    # Keyword hits contribute recency-weighted evidence per server.
                     if _match_keyword(normalized, keyword):
                         per_server_score[server.id] = per_server_score.get(server.id, 0.0) + recency
                         seen = per_server_keywords.setdefault(server.id, [])
@@ -351,6 +389,7 @@ class KeywordClassifier:
             if raw <= 0:
                 continue
             category = server.categories[0].lower() if server.categories else "general"
+            # Track strongest server per category to avoid over-fragmented rankings.
             by_category[category] = max(by_category.get(category, 0.0), raw / max_raw)
 
         scores: list[ServerScore] = []
@@ -364,6 +403,7 @@ class KeywordClassifier:
             category = server.categories[0].lower() if server.categories else "general"
             category_bonus = by_category.get(category, 0.0)
             confidence = _confidence_from_score(normalized_score, density)
+            # Blend server-specific evidence with category-level consensus.
             confidence = max(0.0, min(1.0, (0.8 * confidence) + (0.2 * category_bonus)))
 
             scores.append(
@@ -386,6 +426,7 @@ class KeywordClassifier:
         messages: list[dict[str, str]],
         registry: RegistryModel,
     ) -> list[CategoryMatch]:
+        """Aggregate server scores into top category matches."""
         server_scores = self.score_servers(messages, registry)
         if not server_scores:
             return []
@@ -411,5 +452,6 @@ class KeywordClassifier:
 
 
 def resolve_alias(term: str, aliases: dict[str, str]) -> str:
+    """Normalize and map category aliases to canonical category names."""
     normalized = term.strip().lower()
     return aliases.get(normalized, normalized)

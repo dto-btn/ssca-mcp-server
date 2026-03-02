@@ -118,6 +118,11 @@
       "tools": ["get_project_template", "get_project_guidance", "search_pmcoe_resources"],
       "keywords": [
         "pmcoe",
+        "EPS",
+        "OPMCA",
+        "PMLI",
+        "gating",
+        "PGoF",
         "project management",
         "gestion de projet",
         "project guidance",

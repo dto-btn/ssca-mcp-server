@@ -207,6 +207,57 @@ def test_prompt_find_data_online_renewable_energy(tmp_path: Path) -> None:
     assert result["recommendations"][0]["mcp_server_id"] == "web_search_mcp"
 
 
+def test_prompt_with_eps_routes_to_pmcoe(tmp_path: Path) -> None:
+    reg_path = tmp_path / "pmcoe_registry.json"
+    write_registry(
+        reg_path,
+        {
+            "version": "1.0",
+            "mcp_servers": [
+                {
+                    "id": "pmcoe_mcp",
+                    "endpoint": "https://pmcoe-mcp.example.com/mcp",
+                    "categories": ["pmcoe", "project", "project-management"],
+                    "tools": ["search_pmcoe_resources"],
+                    "keywords": ["pmcoe", "EPS", "project management"],
+                    "weight": 1.0,
+                },
+                {
+                    "id": "corporate_mcp",
+                    "endpoint": "https://corporate-mcp.example.com/mcp",
+                    "categories": ["corporate", "myssc"],
+                    "tools": ["search_policy"],
+                    "keywords": ["policy", "intranet"],
+                    "weight": 1.0,
+                },
+            ],
+            "category_aliases": {"project": "pmcoe"},
+            "routing_rules": {
+                "max_recommendations": 3,
+                "tie_breaker": "weight_then_keyword_density",
+                "default_fallback": {
+                    "category": "generic",
+                    "message": "No clear match. Ask a clarifying question.",
+                },
+            },
+        },
+    )
+
+    settings = make_settings(reg_path)
+    store = RegistryStore(settings)
+    router = OrchestratorRouter(settings=settings, registry_store=store)
+
+    result = router.suggest_route(msg("I need EPS guidance for a new project."))
+
+    assert result["recommendations"]
+    assert result["recommendations"][0]["mcp_server_id"] == "pmcoe_mcp"
+
+    lower_result = router.suggest_route(msg("I need eps guidance for a new project."))
+
+    assert lower_result["recommendations"]
+    assert lower_result["recommendations"][0]["mcp_server_id"] == "pmcoe_mcp"
+
+
 def test_multiple_near_ties_ranked_output(tmp_path: Path) -> None:
     router, _, _ = make_router(tmp_path)
     result = router.suggest_route(msg("Search web resources and query table schema to compare news data."), max_recommendations=3)
