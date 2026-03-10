@@ -154,9 +154,12 @@ class OrchestratorRouter:
         tie_delta = 0.05
         filtered: list = []
         seen_categories: set[str] = set()
+        seen_server_ids: set[str] = set()
         for item in ranked:
             if len(filtered) >= max_recommendations:
                 break
+            if item.server.id in seen_server_ids:
+                continue
             normalized_category = resolve_alias(item.category, registry.category_aliases)
             is_first = len(filtered) == 0
             is_near_tie = top_conf - item.confidence <= tie_delta
@@ -167,9 +170,32 @@ class OrchestratorRouter:
             if is_first or is_near_tie or is_new_category:
                 filtered.append(item)
                 seen_categories.add(normalized_category)
+                seen_server_ids.add(item.server.id)
 
         if require_single_best:
             filtered = filtered[:1]
+
+        ambiguous_categories: set[str] = set()
+        ambiguous_keywords: set[str] = set()
+        ambiguity_candidates = [
+            item
+            for item in ranked
+            if (top_conf - item.confidence <= tie_delta) and item.confidence >= self.settings.min_confidence
+        ]
+        for idx, left in enumerate(ambiguity_candidates):
+            left_category = resolve_alias(left.category, registry.category_aliases)
+            left_keywords = {keyword.strip().lower() for keyword in left.matched_keywords if keyword.strip()}
+            if not left_keywords:
+                continue
+            for right in ambiguity_candidates[idx + 1 :]:
+                right_category = resolve_alias(right.category, registry.category_aliases)
+                if left_category == right_category:
+                    continue
+                right_keywords = {keyword.strip().lower() for keyword in right.matched_keywords if keyword.strip()}
+                overlaps = left_keywords & right_keywords
+                if overlaps:
+                    ambiguous_categories.update({left_category, right_category})
+                    ambiguous_keywords.update(overlaps)
 
         recommendations = []
         for item in filtered:
@@ -200,6 +226,18 @@ class OrchestratorRouter:
             ),
             "plan": None,
         }
+
+        if len(ambiguous_categories) >= 2 and ambiguous_keywords:
+            categories_text = " or ".join(sorted(ambiguous_categories))
+            keyword_list = sorted(ambiguous_keywords)
+            keyword_text = ", ".join(keyword_list[:3])
+            response["disambiguation_note"] = (
+                "Ambiguous intent detected: one or more keywords map to multiple categories."
+            )
+            response["clarifying_question"] = (
+                f"I noticed keyword(s) like '{keyword_text}' could map to multiple categories. "
+                f"Did you mean {categories_text}?"
+            )
 
         if require_single_best and recommendations and recommendations[0]["confidence"] < 0.6:
             response["disambiguation_note"] = (

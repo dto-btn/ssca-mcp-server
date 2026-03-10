@@ -263,6 +263,54 @@ def test_multiple_near_ties_ranked_output(tmp_path: Path) -> None:
     assert len(result["recommendations"]) >= 2
 
 
+def test_shared_keyword_across_categories_triggers_clarifying_question(tmp_path: Path) -> None:
+    reg_path = tmp_path / "ambiguous_registry.json"
+    write_registry(
+        reg_path,
+        {
+            "version": "1.0",
+            "mcp_servers": [
+                {
+                    "id": "web_search_mcp",
+                    "endpoint": "https://web-search-mcp.example.com/mcp",
+                    "categories": ["web-search"],
+                    "tools": ["search"],
+                    "keywords": ["report", "news", "article"],
+                    "weight": 1.0,
+                },
+                {
+                    "id": "db_mcp",
+                    "endpoint": "https://db-mcp.example.com/mcp",
+                    "categories": ["database"],
+                    "tools": ["query"],
+                    "keywords": ["report", "table", "query"],
+                    "weight": 1.0,
+                },
+            ],
+            "category_aliases": {},
+            "routing_rules": {
+                "max_recommendations": 3,
+                "tie_breaker": "weight_then_keyword_density",
+                "default_fallback": {
+                    "category": "general",
+                    "message": "No clear match. Ask a clarifying question.",
+                },
+            },
+        },
+    )
+
+    settings = make_settings(reg_path)
+    store = RegistryStore(settings)
+    router = OrchestratorRouter(settings=settings, registry_store=store)
+
+    result = router.suggest_route(msg("Can you pull a report for me?"), max_recommendations=3)
+
+    assert "clarifying_question" in result
+    assert "report" in str(result["clarifying_question"]).lower()
+    assert "database" in str(result["clarifying_question"]).lower()
+    assert "web-search" in str(result["clarifying_question"]).lower()
+
+
 def test_low_confidence_single_best_triggers_disambiguation(tmp_path: Path) -> None:
     router, _, _ = make_router(tmp_path)
     result = router.suggest_route(msg("help me maybe do something"), require_single_best=True)
@@ -379,6 +427,26 @@ def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:
 
     assert "recommendations" in result
     assert counting_stub.calls == 1
+
+
+def test_suggest_route_deduplicates_same_server_id(tmp_path: Path) -> None:
+    _, store, _ = make_router(tmp_path)
+    llm_settings = make_settings(store.settings.registry_path)
+    llm_settings = OrchestratorSettings(**{**llm_settings.__dict__, "enable_llm_classifier": True})
+
+    # Two LLM categories can map to the same server; routing should return it once.
+    classifier = KeywordClassifier(
+        llm_settings,
+        llm_plugin=StubLlmPlugin({"database": (0.91, "SQL"), "sql": (0.9, "SQL alt")}),
+    )
+    router = OrchestratorRouter(settings=llm_settings, registry_store=store)
+    router.classifier = classifier
+
+    result = router.suggest_route(msg("please help with sql query"), max_recommendations=3)
+
+    recos = result["recommendations"]
+    ids = [reco["mcp_server_id"] for reco in recos]
+    assert len(ids) == len(set(ids))
 
 
 def test_compound_prompt_returns_multiple_categories_and_servers(tmp_path: Path) -> None:
