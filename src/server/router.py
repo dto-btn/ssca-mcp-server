@@ -80,12 +80,26 @@ class OrchestratorRouter:
 
         top = categories_data[0]
         top_confidence = float(top["confidence"])
-        uncertainty = ""
         if top_confidence < self.settings.min_confidence:
-            uncertainty = " Confidence is low; ask a clarifying question."
+            fallback_category = registry.routing_rules.default_fallback.category
+            fallback_message = registry.routing_rules.default_fallback.message
+            categories_data = [
+                {
+                    "name": fallback_category,
+                    "confidence": 0.0,
+                    "matched_keywords": [],
+                    "classification_method": "fallback",
+                }
+            ]
+            explanation = (
+                "Top category confidence below threshold. "
+                f"Fallback selected: {fallback_message}"
+            )
+            return categories_data, "fallback", explanation
+
         explanation = (
             f"Top category '{top['name']}' selected via {top['classification_method']} classification with evidence: "
-            f"{', '.join(top['matched_keywords'][:5]) or 'none'}.{uncertainty}"
+            f"{', '.join(top['matched_keywords'][:5]) or 'none'}."
         )
         return categories_data, str(top["classification_method"]), explanation
 
@@ -120,14 +134,39 @@ class OrchestratorRouter:
             }
 
         top_conf = ranked[0].confidence
+        if top_conf < self.settings.min_confidence:
+            fallback_category = registry.routing_rules.default_fallback.category
+            fallback = {
+                "category": fallback_category,
+                "upstream": None,
+                "reason": registry.routing_rules.default_fallback.message,
+                "suggestions_for_user": [
+                    "Are you trying to query a database or search the web?",
+                    "Do you want help with calendar scheduling?",
+                    "Can you share the main action you want to perform?",
+                ],
+            }
+            return {
+                "recommendations": [],
+                "fallback": fallback,
+                "classification_method": "fallback",
+            }
         tie_delta = 0.05
         filtered: list = []
+        seen_categories: set[str] = set()
         for item in ranked:
             if len(filtered) >= max_recommendations:
                 break
-            # Keep near-ties so the caller can decide whether to disambiguate.
-            if top_conf - item.confidence <= tie_delta or len(filtered) == 0:
+            normalized_category = resolve_alias(item.category, registry.category_aliases)
+            is_first = len(filtered) == 0
+            is_near_tie = top_conf - item.confidence <= tie_delta
+            is_new_category = normalized_category not in seen_categories
+
+            # Keep near ties and also retain distinct categories so compound
+            # intents can route to more than one MCP server.
+            if is_first or is_near_tie or is_new_category:
                 filtered.append(item)
+                seen_categories.add(normalized_category)
 
         if require_single_best:
             filtered = filtered[:1]
@@ -307,7 +346,7 @@ class OrchestratorRouter:
                 "categories": [],
                 "recommendations": [],
                 "fallback": {
-                    "category": "generic",
+                    "category": "general",
                     "reason": "Classification and routing failed due to a server-side error.",
                     "upstream": None,
                 },
@@ -349,7 +388,7 @@ class OrchestratorRouter:
             "selected_category": (
                 str(routing["recommendations"][0]["category"])
                 if routing.get("recommendations")
-                else str((routing.get("fallback") or {}).get("category", "generic"))
+                else str((routing.get("fallback") or {}).get("category", "general"))
             ),
             "selected_tool": tool_name,
             "payload": payload or {},

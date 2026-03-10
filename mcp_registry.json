@@ -2,45 +2,6 @@
   "version": "1.0",
   "mcp_servers": [
     {
-      "id": "archibus_mcp",
-      "endpoint": "https://archibus-mcp.example.com/mcp",
-      "description": "Workspace and facilities operations including desk/room booking, floor plans, and workplace reservations.",
-      "categories": ["archibus", "workspace", "booking"],
-      "tools": ["search_spaces", "book_desk", "book_room", "get_floor_plan"],
-      "keywords": [
-        "archibus",
-        "workspace",
-        "espace de travail",
-        "workplace",
-        "lieu de travail",
-        "hotel desk",
-        "bureau partage",
-        "hoteling",
-        "partage de bureaux",
-        "desk booking",
-        "reserve desk",
-        "desk reservation",
-        "reservation de poste",
-        "room booking",
-        "book a room",
-        "book a desk",
-        "meeting room",
-        "salle de reunion",
-        "room reservation",
-        "floor plan",
-        "plan d'etage",
-        "space management",
-        "gestion des espaces",
-        "seat reservation",
-        "reservation de place",
-        "reservation de bureau",
-        "reservation de salle",
-        "reserver une salle",
-        "poste de travail"
-      ],
-      "weight": 1.0
-    },
-    {
       "id": "geds_mcp",
       "endpoint": "https://geds-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
       "description": "Government employee directory lookups such as people search, contact details, manager relationships, and org charts.",
@@ -86,6 +47,7 @@
       "keywords": [
         "bits",
         "br",
+        "opi",
         "business request",
         "demande d'affaires",
         "business request id",
@@ -149,44 +111,6 @@
         "registre des parties prenantes",
         "lessons learned",
         "lecons apprises"
-      ],
-      "weight": 1.0
-    },
-    {
-      "id": "telecom_mcp",
-      "endpoint": "https://telecom-mcp.example.com/mcp",
-      "description": "Telecommunications support for phone lines, mobile devices, SIM changes, plans, and telecom service tickets.",
-      "categories": ["telecom", "phone", "mobile"],
-      "tools": ["manage_phone_line", "manage_mobile_device", "create_telecom_ticket"],
-      "keywords": [
-        "telecom",
-        "phone line",
-        "ligne telephonique",
-        "mobile device",
-        "appareil mobile",
-        "sim card",
-        "carte sim",
-        "voip",
-        "telephone",
-        "landline",
-        "telephone fixe",
-        "call forwarding",
-        "transfert d'appel",
-        "caller id",
-        "afficheur",
-        "extension",
-        "poste telephonique",
-        "desk phone",
-        "telephone de bureau",
-        "mobile plan",
-        "forfait mobile",
-        "cell phone",
-        "telephone cellulaire",
-        "device upgrade",
-        "mise a niveau de l'appareil",
-        "phone number change",
-        "changement de numero de telephone",
-        "telephone mobile"
       ],
       "weight": 1.0
     },
@@ -291,13 +215,14 @@
     "intranet": "corporate",
     "parliament": "parliamentary",
     "mp": "parliamentary",
-    "cpmcp": "parliamentary"
+    "cpmcp": "parliamentary",
+    "generic": "general"
   },
   "routing_rules": {
     "max_recommendations": 3,
     "tie_breaker": "weight_then_keyword_density",
     "default_fallback": {
-      "category": "generic",
+      "category": "general",
       "message": "No clear match. Ask a clarifying question."
     }
   }

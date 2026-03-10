@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "../../../ProjectLISA/ssc-assistant"
+		},
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"npm run build": true
+		}
+	}
+}

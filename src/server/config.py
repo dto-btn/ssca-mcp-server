@@ -46,7 +46,6 @@ class OrchestratorSettings:
     max_messages: int
     min_confidence: float
     enable_llm_classifier: bool
-    llm_blend_alpha: float
     azure_openai_endpoint: str | None
     azure_openai_api_version: str
     llm_model: str | None
@@ -63,18 +62,12 @@ class OrchestratorSettings:
 def load_settings() -> OrchestratorSettings:
     """Load orchestrator settings from environment with safe bounds."""
     registry_path = Path(os.getenv("ORCHESTRATOR_REGISTRY_PATH", "./mcp_registry.json")).expanduser().resolve()
-    llm_blend_alpha = _to_float(os.getenv("ORCHESTRATOR_LLM_BLEND_ALPHA"), 0.35)
-    if llm_blend_alpha < 0:
-        llm_blend_alpha = 0.0
-    if llm_blend_alpha > 1:
-        llm_blend_alpha = 1.0
 
     return OrchestratorSettings(
         registry_path=registry_path,
         max_messages=max(1, _to_int(os.getenv("ORCHESTRATOR_MAX_MESSAGES"), 10)),
         min_confidence=max(0.0, min(1.0, _to_float(os.getenv("ORCHESTRATOR_MIN_CONFIDENCE"), 0.4))),
         enable_llm_classifier=_to_bool(os.getenv("ENABLE_LLM_CLASSIFIER"), False),
-        llm_blend_alpha=llm_blend_alpha,
         azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
         azure_openai_api_version=os.getenv("AZURE_OPENAI_VERSION", "2024-05-01-preview"),
         llm_model=_first_non_empty(

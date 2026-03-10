@@ -121,7 +121,9 @@ class RegistryStore:
         """
         if not self.settings.update_registry_enabled:
             raise PermissionError("Registry update is disabled. Set ORCHESTRATOR_ENABLE_UPDATE_REGISTRY=true to enable it.")
-        if self.settings.admin_secret and provided_secret != self.settings.admin_secret:
+        if not (self.settings.admin_secret or "").strip():
+            raise PermissionError("Admin secret is required to update the registry. Set ORCHESTRATOR_ADMIN_SECRET.")
+        if provided_secret != self.settings.admin_secret:
             raise PermissionError("Admin authentication failed for update_registry.")
 
         current = self.load_registry()

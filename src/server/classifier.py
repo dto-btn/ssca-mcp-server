@@ -18,6 +18,56 @@ except ImportError:
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 logger = get_logger("orchestrator.classifier")
 
+MAX_LLM_CATEGORIES = 3
+MAX_LLM_RATIONALE_CHARS = 160
+
+
+def _try_parse_json_object(content: str) -> dict[str, object] | None:
+    """Best-effort parse for LLM JSON responses.
+
+    Handles common non-strict variants (markdown fences, wrapped prose, and
+    trailing commas) without raising, so routing can continue gracefully.
+    """
+    if not content:
+        return None
+
+    candidates: list[str] = []
+    trimmed = content.strip()
+    if trimmed:
+        candidates.append(trimmed)
+
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", trimmed, flags=re.IGNORECASE)
+    if fenced and fenced.group(1).strip():
+        candidates.append(fenced.group(1).strip())
+
+    start = trimmed.find("{")
+    end = trimmed.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(trimmed[start : end + 1])
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            # Retry with trailing commas removed: {"a":1,} / [1,2,]
+            cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+            if cleaned == candidate:
+                continue
+            try:
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+
+    return None
+
 
 @dataclass
 class CategoryMatch:
@@ -97,18 +147,17 @@ class LlmClassifierPlugin:
         allowed_categories: list[str] | None = None,
         server_context: list[dict[str, object]] | None = None,
     ) -> dict[str, tuple[float, str]]:
-        """Classify conversation intent into one category using Azure OpenAI.
+        """Classify conversation intent into one or more categories using Azure OpenAI.
 
-        Returns a map of ``category -> (confidence, rationale)`` to match the
-        existing keyword-classifier interface. If anything fails, the method
-        returns an empty result so callers can fall back to keyword scoring.
+        Returns a map of ``category -> (confidence, rationale)``. If anything fails,
+        the method returns an empty result so callers can fall back to keyword scoring.
         """
         if not self._enabled or self._client is None or not self.settings.llm_model:
             return {}
 
         candidate_categories = [category.strip().lower() for category in (allowed_categories or []) if category.strip()]
-        if "generic" not in candidate_categories:
-            candidate_categories.append("generic")
+        if "general" not in candidate_categories:
+            candidate_categories.append("general")
 
         transcript_lines = []
         for message in messages:
@@ -119,13 +168,22 @@ class LlmClassifierPlugin:
             transcript_lines.append(f"{role}: {content}")
 
         if not transcript_lines:
-            return {"generic": (1.0, "Empty message context")}
+            return {"general": (1.0, "Empty message context")}
 
         system_prompt = (
-            "You classify user intent into exactly one category. "
-            "Return strict JSON with keys: category (string), confidence (number 0..1), rationale (string). "
+            "You classify user intent into one or more categories. "
+            "Return ONLY a valid JSON object (no markdown, no prose). "
+            "Use one of these exact shapes:\n"
+            "{\"category\": \"general\", \"confidence\": 1.0, \"rationale\": \"brief reason\"}\n"
+            "or\n"
+            "{\"categories\": ["
+            "{\"category\": \"general\", \"confidence\": 1.0, \"rationale\": \"brief reason\"}"
+            "]}. "
             f"Only use one of these categories: {', '.join(candidate_categories)}. "
-            "If uncertain, choose generic."
+            f"Return at most {MAX_LLM_CATEGORIES} categories, sorted by confidence descending. "
+            f"Each rationale must be <= {MAX_LLM_RATIONALE_CHARS} characters. "
+            "Confidence must be a number between 0 and 1. "
+            "If uncertain, choose general."
         )
 
         server_context_json = "[]"
@@ -149,16 +207,40 @@ class LlmClassifierPlugin:
                     },
                 ],
                 temperature=0,
-                max_tokens=140,
+                max_tokens=260,
                 response_format={"type": "json_object"},
             )
             content = (completion.choices[0].message.content or "{}").strip()
-            parsed = json.loads(content)
-            category = str(parsed.get("category", "generic")).strip().lower()
+            parsed = _try_parse_json_object(content)
+            if parsed is None:
+                logger.warning("LLM classifier returned non-JSON payload; using keyword fallback.")
+                return {}
+            categories_payload = parsed.get("categories")
+            if isinstance(categories_payload, list):
+                results: dict[str, tuple[float, str]] = {}
+                for entry in categories_payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    category = str(entry.get("category", "general")).strip().lower()
+                    confidence = float(entry.get("confidence", 0.0))
+                    rationale = str(entry.get("rationale", ""))[:MAX_LLM_RATIONALE_CHARS]
+                    if category == "generic":
+                        category = "general"
+                    if category not in set(candidate_categories):
+                        category = "general"
+                    confidence = max(0.0, min(1.0, confidence))
+                    results[category] = (confidence, rationale)
+                    if len(results) >= MAX_LLM_CATEGORIES:
+                        break
+                return results
+
+            category = str(parsed.get("category", "general")).strip().lower()
             confidence = float(parsed.get("confidence", 0.0))
-            rationale = str(parsed.get("rationale", ""))
+            rationale = str(parsed.get("rationale", ""))[:MAX_LLM_RATIONALE_CHARS]
+            if category == "generic":
+                category = "general"
             if category not in set(candidate_categories):
-                category = "generic"
+                category = "general"
             confidence = max(0.0, min(1.0, confidence))
             return {category: (confidence, rationale)}
         except Exception:
@@ -234,17 +316,20 @@ class KeywordClassifier:
                 normalized = category.strip().lower()
                 if normalized:
                     categories.add(normalized)
-        categories.add("generic")
+        categories.add("general")
         return sorted(categories)
 
-    def _llm_top_category(
+    def _llm_category_scores(
         self,
         messages: list[dict[str, str]],
         registry: RegistryModel,
-    ) -> tuple[str, float, str] | None:
-        """Ask the LLM for the top category constrained by registry categories."""
+    ) -> dict[str, tuple[float, str]] | None:
+        """Ask the LLM for category scores constrained by registry categories."""
         if not self.settings.enable_llm_classifier:
             return None
+
+        combined_text = "\n".join(message.get("content", "") for message in messages)
+        normalized_text = normalize_text(combined_text)
 
         allowed_categories = self._collect_registry_categories(registry)
         server_context = [
@@ -254,6 +339,11 @@ class KeywordClassifier:
                 "categories": server.categories,
                 "tools": server.tools,
                 "keywords": server.keywords[:10],
+                "matched_keywords": [
+                    keyword
+                    for keyword in server.keywords
+                    if _match_keyword(normalized_text, keyword)
+                ][:10],
             }
             for server in registry.mcp_servers
         ]
@@ -265,8 +355,10 @@ class KeywordClassifier:
         if not llm_scores:
             return None
 
-        category, (confidence, rationale) = max(llm_scores.items(), key=lambda item: item[1][0])
-        return category.strip().lower(), float(confidence), rationale
+        return {
+            category.strip().lower(): (float(confidence), rationale)
+            for category, (confidence, rationale) in llm_scores.items()
+        }
 
     def _score_servers_from_llm_category(
         self,
@@ -315,6 +407,29 @@ class KeywordClassifier:
         scores.sort(key=lambda item: (item.confidence, item.server.weight), reverse=True)
         return scores
 
+    def _score_servers_from_llm_categories(
+        self,
+        registry: RegistryModel,
+        llm_scores: dict[str, tuple[float, str]],
+    ) -> list[ServerScore]:
+        """Score servers for every LLM-selected category above confidence cutoff."""
+        scores: list[ServerScore] = []
+        if not llm_scores:
+            return scores
+
+        tie_delta = 0.1
+        top_confidence = max(confidence for confidence, _ in llm_scores.values())
+
+        for category, (confidence, _rationale) in llm_scores.items():
+            if confidence < self.settings.min_confidence:
+                continue
+            if top_confidence - confidence > tie_delta:
+                continue
+            scores.extend(self._score_servers_from_llm_category(registry, category, confidence))
+
+        scores.sort(key=lambda item: (item.confidence, item.server.weight), reverse=True)
+        return scores
+
     def _truncate_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
         """Apply hard limits on context length before classification.
 
@@ -349,12 +464,11 @@ class KeywordClassifier:
         if not scoped_messages:
             return []
 
-        llm_choice = self._llm_top_category(scoped_messages, registry)
-        if llm_choice:
-            llm_category, llm_confidence, _llm_rationale = llm_choice
-            llm_scores = self._score_servers_from_llm_category(registry, llm_category, llm_confidence)
-            if llm_scores and llm_confidence >= self.settings.min_confidence:
-                return llm_scores
+        llm_scores = self._llm_category_scores(scoped_messages, registry)
+        if llm_scores:
+            llm_server_scores = self._score_servers_from_llm_categories(registry, llm_scores)
+            if llm_server_scores:
+                return llm_server_scores
 
         per_server_score: dict[str, float] = {}
         per_server_keywords: dict[str, list[str]] = {}

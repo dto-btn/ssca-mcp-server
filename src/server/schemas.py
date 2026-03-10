@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 
 class DefaultFallback(BaseModel):
-    category: str = "generic"
+    category: str = "general"
     message: str = "No clear match. Ask a clarifying question."
 
 
@@ -50,8 +50,9 @@ class RegistryServer(BaseModel):
         if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
             raise ValueError("http:// endpoints are allowed only for local development hosts (localhost/127.0.0.1)")
 
-        if "/mcp" not in normalized.lower():
-            raise ValueError("endpoint must target an MCP HTTP path (for example, https://host/mcp)")
+        path = (parsed.path or "").lower()
+        if not (path.endswith("/mcp") or path.endswith("/mcp/")):
+            raise ValueError("endpoint must target an MCP HTTP path ending in /mcp")
         return normalized
 
 

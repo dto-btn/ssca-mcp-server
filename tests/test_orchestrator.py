@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from server.classifier import KeywordClassifier, LlmClassifierPlugin, resolve_alias
+from server.classifier import KeywordClassifier, LlmClassifierPlugin, resolve_alias, _try_parse_json_object
 from server.config import OrchestratorSettings
 from server.registry import RegistryStore
 from server.router import OrchestratorRouter
@@ -15,7 +15,6 @@ def make_settings(registry_path: Path, *, hot_reload: bool = False) -> Orchestra
         max_messages=10,
         min_confidence=0.4,
         enable_llm_classifier=False,
-        llm_blend_alpha=0.35,
         azure_openai_endpoint=None,
         azure_openai_api_version="2024-05-01-preview",
         llm_model=None,
@@ -267,10 +266,9 @@ def test_multiple_near_ties_ranked_output(tmp_path: Path) -> None:
 def test_low_confidence_single_best_triggers_disambiguation(tmp_path: Path) -> None:
     router, _, _ = make_router(tmp_path)
     result = router.suggest_route(msg("help me maybe do something"), require_single_best=True)
-    if result["recommendations"]:
-        assert "disambiguation_note" in result or result["recommendations"][0]["confidence"] >= 0.6
-    else:
-        assert "fallback" in result
+    assert result["recommendations"] == []
+    assert "fallback" in result
+    assert result["fallback"]["category"] == "generic"
 
 
 def test_unmatched_prompt_returns_generic_with_no_upstream(tmp_path: Path) -> None:
@@ -381,3 +379,93 @@ def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:
 
     assert "recommendations" in result
     assert counting_stub.calls == 1
+
+
+def test_compound_prompt_returns_multiple_categories_and_servers(tmp_path: Path) -> None:
+    reg_path = tmp_path / "compound_registry.json"
+    write_registry(
+        reg_path,
+        {
+            "version": "1.0",
+            "mcp_servers": [
+                {
+                    "id": "pmcoe_mcp",
+                    "endpoint": "https://pmcoe-mcp.example.com/mcp",
+                    "categories": ["pmcoe", "project", "project-management"],
+                    "tools": ["search_pmcoe_resources"],
+                    "keywords": ["pgof", "template", "project", "document"],
+                    "weight": 1.0,
+                },
+                {
+                    "id": "cpMCP",
+                    "endpoint": "https://parliament-mcp.example.com/mcp",
+                    "categories": ["parliamentary", "parliament", "cpmcp"],
+                    "tools": ["find_mp"],
+                    "keywords": ["mp", "member of parliament", "phone number", "scott foster"],
+                    "weight": 1.0,
+                },
+            ],
+            "category_aliases": {
+                "project": "pmcoe",
+                "parliament": "parliamentary",
+                "mp": "parliamentary",
+                "cpmcp": "parliamentary",
+            },
+            "routing_rules": {
+                "max_recommendations": 3,
+                "tie_breaker": "weight_then_keyword_density",
+                "default_fallback": {
+                    "category": "general",
+                    "message": "No clear match. Ask a clarifying question.",
+                },
+            },
+        },
+    )
+
+    settings = make_settings(reg_path)
+    store = RegistryStore(settings)
+    router = OrchestratorRouter(settings=settings, registry_store=store)
+
+    result = router.suggest_route(
+        msg(
+            "What types of documents and/or templates are available in the SSC PGoF and how can we use them? "
+            "and what is the phone number of the MP scott foster"
+        ),
+        max_recommendations=3,
+    )
+
+    recos = result["recommendations"]
+    assert len(recos) >= 2
+    categories = {reco["category"] for reco in recos}
+    assert "pmcoe" in categories
+    assert "parliamentary" in categories
+
+
+def test_try_parse_json_object_accepts_markdown_fenced_json() -> None:
+        payload = """```json
+        {
+            "category": "database",
+            "confidence": 0.92,
+            "rationale": "SQL intent"
+        }
+        ```"""
+
+        parsed = _try_parse_json_object(payload)
+        assert parsed is not None
+        assert parsed["category"] == "database"
+
+
+def test_try_parse_json_object_recovers_trailing_commas() -> None:
+        payload = """{
+            "categories": [
+                {
+                    "category": "database",
+                    "confidence": 0.9,
+                    "rationale": "SQL intent",
+                },
+            ],
+        }"""
+
+        parsed = _try_parse_json_object(payload)
+        assert parsed is not None
+        assert "categories" in parsed
