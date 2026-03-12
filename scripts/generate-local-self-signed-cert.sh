@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Generates localhost TLS assets for the orchestrator dev server.
+#
+# Prefers mkcert for trusted local certificates and falls back to OpenSSL
+# self-signed output when mkcert is unavailable.
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CERT_DIR="${1:-$ROOT_DIR/certs}"
 CERT_FILE="$CERT_DIR/localhost.crt"

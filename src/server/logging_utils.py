@@ -1,3 +1,5 @@
+"""Shared logging helpers including lightweight sensitive-token redaction."""
+
 from __future__ import annotations
 
 import logging

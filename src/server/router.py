@@ -1,3 +1,9 @@
+"""Routing orchestration layer that converts classification scores into MCP recommendations.
+
+Uses a deterministic fallback and ambiguity strategy so clients can safely
+continue even when confidence is low.
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -116,6 +122,8 @@ class OrchestratorRouter:
         and optional disambiguation hints when confidence is low.
         """
         if not ranked:
+            # Explicitly returning upstream=None indicates "no MCP call" rather
+            # than a transport failure, which lets clients continue model-only.
             fallback_category = registry.routing_rules.default_fallback.category
             fallback = {
                 "category": fallback_category,
@@ -135,6 +143,7 @@ class OrchestratorRouter:
 
         top_conf = ranked[0].confidence
         if top_conf < self.settings.min_confidence:
+            # Keep the same no-upstream contract for low-confidence outcomes.
             fallback_category = registry.routing_rules.default_fallback.category
             fallback = {
                 "category": fallback_category,

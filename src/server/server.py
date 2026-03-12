@@ -1,3 +1,10 @@
+"""FastMCP + HTTP entrypoint for orchestrator classification and routing tools.
+
+This service exposes a dual-surface server:
+- MCP tools for SDK clients.
+- A lightweight HTTP endpoint used by playground pre-routing.
+"""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -71,6 +78,8 @@ _log_startup_config_summary()
 
 
 def _allowed_origins_from_env() -> list[str]:
+    # Keep CORS policy environment-driven so local playground variants can
+    # connect without rebuilding the orchestrator image.
     raw = os.getenv(
         "ORCHESTRATOR_ALLOWED_ORIGINS",
         "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173,https://localhost:8080,https://127.0.0.1:8080,https://localhost:5173,https://127.0.0.1:5173",
@@ -130,6 +139,8 @@ async def suggest_route_http(request: Request) -> JSONResponse:
     locale = body.get("locale") if isinstance(body, dict) else None
     metadata = body.get("metadata") if isinstance(body, dict) else None
 
+    # This endpoint mirrors the MCP tool response shape so clients can switch
+    # transports without changing downstream parsing logic.
     result = router.suggest_route(
         messages=messages,
         max_recommendations=max_recommendations,

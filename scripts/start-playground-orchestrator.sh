@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Starts the local orchestrator with sensible development defaults.
+#
+# Supports optional TLS bootstrap, CORS defaults for both Vite and playground
+# ports, and graceful shutdown tuning.
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 

@@ -1,3 +1,9 @@
+"""Keyword and optional LLM-assisted category classification for orchestrator routing.
+
+Includes robust JSON parsing for model responses and a hybrid scoring pipeline
+that can map one user request to multiple candidate MCP categories.
+"""
+
 from __future__ import annotations
 
 import json

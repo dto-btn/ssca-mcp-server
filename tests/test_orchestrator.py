@@ -1,3 +1,5 @@
+"""Unit tests for orchestrator parsing, classification, routing, and registry behavior."""
+
 from __future__ import annotations
 
 import json

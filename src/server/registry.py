@@ -1,3 +1,5 @@
+"""Registry persistence layer with file locking and admin-gated mutation APIs."""
+
 from __future__ import annotations
 
 import json

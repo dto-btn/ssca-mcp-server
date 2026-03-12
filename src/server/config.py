@@ -1,3 +1,5 @@
+"""Environment-backed orchestrator configuration with safe parsing defaults."""
+
 from __future__ import annotations
 
 import os
