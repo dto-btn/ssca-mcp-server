@@ -40,7 +40,7 @@
     },
     {
       "id": "bits_mcp",
-      "endpoint": "https://bits-mcp.example.com/mcp",
+      "endpoint": "https://bits-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
       "description": "Business request and change-request workflows including request creation, tracking, and status retrieval.",
       "categories": ["bits", "business-request", "change-request"],
       "tools": ["create_request", "get_request_status", "search_requests"],
@@ -214,7 +214,6 @@
     "br": "bits",
     "business request": "bits",
     "project": "pmcoe",
-    "phone": "telecom",
     "myssc": "corporate",
     "intranet": "corporate",
     "parliament": "parliamentary",

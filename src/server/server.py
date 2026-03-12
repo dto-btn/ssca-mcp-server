@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import json
 import os
 from datetime import UTC, datetime
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
+from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 try:
     from .config import settings
@@ -73,13 +79,73 @@ def _allowed_origins_from_env() -> list[str]:
 
 
 _http_app = mcp.streamable_http_app()
-app = CORSMiddleware(
+_cors_wrapped_mcp_app = CORSMiddleware(
     _http_app,
     allow_origins=_allowed_origins_from_env(),
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["mcp-session-id"],
     allow_credentials=True,
+)
+
+
+@asynccontextmanager
+async def orchestrator_lifespan(_: Starlette) -> AsyncIterator[None]:
+    """Initialize FastMCP session manager for streamable HTTP transport."""
+    async with mcp.session_manager.run():
+        yield
+
+
+async def suggest_route_http(request: Request) -> JSONResponse:
+    """HTTP helper endpoint for frontend pre-routing before LLM invocation."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_json",
+                    "message": "Malformed JSON payload",
+                },
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            status_code=400,
+        )
+
+    messages = body.get("messages") if isinstance(body, dict) else None
+    if not isinstance(messages, list) or len(messages) == 0:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_input",
+                    "message": "messages must be a non-empty list",
+                },
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            status_code=400,
+        )
+
+    max_recommendations = body.get("max_recommendations") if isinstance(body, dict) else None
+    require_single_best = bool(body.get("require_single_best", False)) if isinstance(body, dict) else False
+    locale = body.get("locale") if isinstance(body, dict) else None
+    metadata = body.get("metadata") if isinstance(body, dict) else None
+
+    result = router.suggest_route(
+        messages=messages,
+        max_recommendations=max_recommendations,
+        require_single_best=require_single_best,
+        locale=locale,
+        metadata=metadata,
+    )
+    return JSONResponse(result)
+
+
+app = Starlette(
+    lifespan=orchestrator_lifespan,
+    routes=[
+        Route("/orchestrator/suggest-route", suggest_route_http, methods=["POST"]),
+        Mount("/", app=_cors_wrapped_mcp_app),
+    ]
 )
 
 
