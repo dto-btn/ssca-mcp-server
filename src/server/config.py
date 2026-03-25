@@ -48,8 +48,10 @@ class OrchestratorSettings:
     max_messages: int
     min_confidence: float
     enable_llm_classifier: bool
-    azure_openai_endpoint: str | None
-    azure_openai_api_version: str
+    litellm_proxy_url: str | None
+    litellm_proxy_bearer_token: str | None
+    litellm_proxy_scope: str | None
+    litellm_proxy_api_key: str | None
     llm_model: str | None
     llm_timeout_seconds: float
     verbose_logging: bool
@@ -64,14 +66,42 @@ class OrchestratorSettings:
 def load_settings() -> OrchestratorSettings:
     """Load orchestrator settings from environment with safe bounds."""
     registry_path = Path(os.getenv("ORCHESTRATOR_REGISTRY_PATH", "./mcp_registry.json")).expanduser().resolve()
+    api_client_id = _first_non_empty(
+        os.getenv("AZURE_AD_CLIENT_ID"),
+        os.getenv("API_CLIENT_ID"),
+        os.getenv("AZURE_CLIENT_ID"),
+    )
+    if api_client_id:
+        if api_client_id.startswith("api://"):
+            default_proxy_scope = f"{api_client_id}/.default"
+        else:
+            default_proxy_scope = f"api://{api_client_id}/.default"
+    else:
+        default_proxy_scope = None
 
     return OrchestratorSettings(
         registry_path=registry_path,
         max_messages=max(1, _to_int(os.getenv("ORCHESTRATOR_MAX_MESSAGES"), 10)),
         min_confidence=max(0.0, min(1.0, _to_float(os.getenv("ORCHESTRATOR_MIN_CONFIDENCE"), 0.4))),
         enable_llm_classifier=_to_bool(os.getenv("ENABLE_LLM_CLASSIFIER"), False),
-        azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        azure_openai_api_version=os.getenv("AZURE_OPENAI_VERSION", "2024-05-01-preview"),
+        litellm_proxy_url=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_URL"),
+            os.getenv("LITELLM_PROXY_URL"),
+            "http://localhost:5001/proxy/litellm/v1",
+        ),
+        litellm_proxy_bearer_token=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN"),
+            os.getenv("LITELLM_PROXY_BEARER_TOKEN"),
+        ),
+        litellm_proxy_scope=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_SCOPE"),
+            os.getenv("LITELLM_PROXY_SCOPE"),
+            default_proxy_scope,
+        ),
+        litellm_proxy_api_key=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_API_KEY"),
+            os.getenv("LITELLM_PROXY_API_KEY"),
+        ),
         llm_model=_first_non_empty(
             os.getenv("ORCHESTRATOR_LLM_MODEL"),
             os.getenv("GPT40_DEPLOYMENT_NAME"),
