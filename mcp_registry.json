@@ -166,44 +166,6 @@
         "indemnisation"
       ],
       "weight": 1.0
-    },
-    {
-      "id": "cpMCP",
-      "endpoint": "https://ssca-mcp-server.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
-      "description": "Canadian parliamentary information including MPs, constituencies, parliamentary roles, cabinet, and federal riding data.",
-      "categories": ["parliamentary", "parliament", "cpmcp"],
-      "tools": ["find_mp", "find_constituency", "get_parliamentary_role"],
-      "keywords": [
-        "parliament",
-        "parliamentary",
-        "parlementaire",
-        "parlement",
-        "member of parliament",
-        "membre du parlement",
-        "members of parliament",
-        "membres du parlement",
-        "mp",
-        "mps",
-        "depute",
-        "depute federal",
-        "deputes",
-        "house of commons",
-        "chambre des communes",
-        "senate",
-        "senat",
-        "senateur",
-        "prime minister",
-        "premier ministre",
-        "cabinet",
-        "cabinet minister",
-        "ministre du cabinet",
-        "minister of",
-        "ministre",
-        "federal riding",
-        "circonscription",
-        "circonscription federale"
-      ],
-      "weight": 1.0
     }
   ],
   "category_aliases": {
