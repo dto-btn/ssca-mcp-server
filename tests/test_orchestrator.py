@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from server.classifier import KeywordClassifier, LlmClassifierPlugin, resolve_alias, _try_parse_json_object
-from server.config import OrchestratorSettings
+from server.config import OrchestratorSettings, load_settings
 from server.registry import RegistryStore
 from server.router import OrchestratorRouter
 
@@ -17,9 +17,8 @@ def make_settings(registry_path: Path, *, hot_reload: bool = False) -> Orchestra
         max_messages=10,
         min_confidence=0.4,
         enable_llm_classifier=False,
-        litellm_proxy_url="http://localhost:5001/proxy/litellm/v1",
+        litellm_proxy_url="http://localhost:4000/v1",
         litellm_proxy_bearer_token=None,
-        litellm_proxy_scope=None,
         litellm_proxy_api_key=None,
         llm_model=None,
         llm_timeout_seconds=8.0,
@@ -31,6 +30,32 @@ def make_settings(registry_path: Path, *, hot_reload: bool = False) -> Orchestra
         update_registry_enabled=True,
         admin_secret="secret",
     )
+
+
+def test_load_settings_defaults_to_standalone_litellm_proxy_url(monkeypatch) -> None:
+    for key in (
+        "ORCHESTRATOR_LITELLM_PROXY_URL",
+        "LITELLM_PROXY_URL",
+        "LITELLM_BASE_URL",
+        "LITELLM_PROXY_API_KEY",
+        "ORCHESTRATOR_LITELLM_PROXY_API_KEY",
+        "LITELLM_MASTER_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = load_settings()
+
+    assert settings.litellm_proxy_url == "http://localhost:4000/v1"
+
+
+def test_load_settings_uses_litellm_master_key_as_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_LITELLM_PROXY_API_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-master-key")
+
+    settings = load_settings()
+
+    assert settings.litellm_proxy_api_key == "test-master-key"
 
 
 def write_registry(path: Path, payload: dict) -> None:
@@ -96,7 +121,7 @@ def msg(text: str) -> list[dict[str, str]]:
 
 
 def test_keyword_matching_and_scoring(tmp_path: Path) -> None:
-    router, store, _ = make_router(tmp_path)
+    _, store, _ = make_router(tmp_path)
     classifier = KeywordClassifier(store.settings)
     registry = store.load_registry()
 
@@ -114,7 +139,7 @@ def test_alias_resolution() -> None:
 
 
 def test_confidence_calculation_bounds(tmp_path: Path) -> None:
-    router, store, _ = make_router(tmp_path)
+    _, store, _ = make_router(tmp_path)
     classifier = KeywordClassifier(store.settings)
     registry = store.load_registry()
     scores = classifier.score_servers(msg("search web news article research"), registry)
@@ -123,7 +148,7 @@ def test_confidence_calculation_bounds(tmp_path: Path) -> None:
 
 
 def test_tie_breaking_and_weighting(tmp_path: Path) -> None:
-    router, store, reg_path = make_router(tmp_path)
+    router, _, reg_path = make_router(tmp_path)
     payload = sample_registry_payload()
     payload["mcp_servers"][0]["weight"] = 1.2
     payload["mcp_servers"][1]["weight"] = 0.9
@@ -332,7 +357,7 @@ def test_unmatched_prompt_returns_generic_with_no_upstream(tmp_path: Path) -> No
 
 
 def test_hot_reload_registry(tmp_path: Path) -> None:
-    router, store, reg_path = make_router(tmp_path, hot_reload=True)
+    router, _, reg_path = make_router(tmp_path, hot_reload=True)
     first = router.suggest_route(msg("schedule a meeting"))
     assert first["recommendations"][0]["mcp_server_id"] == "calendar_mcp"
 
@@ -349,25 +374,29 @@ def test_hot_reload_registry(tmp_path: Path) -> None:
 
 class StubLlmPlugin(LlmClassifierPlugin):
     def __init__(self, result: dict[str, tuple[float, str]]):
+        super().__init__(make_settings(Path("/tmp/registry.json")))
         self.result = result
 
     def classify_with_llm(
         self,
-        messages: list[dict[str, str]],
-        allowed_categories: list[str] | None = None,
+        _messages: list[dict[str, str]],
+        _allowed_categories: list[str] | None = None,
+        _server_context: list[dict[str, object]] | None = None,
     ) -> dict[str, tuple[float, str]]:
         return self.result
 
 
 class CountingStubLlmPlugin(LlmClassifierPlugin):
     def __init__(self, result: dict[str, tuple[float, str]]):
+        super().__init__(make_settings(Path("/tmp/registry.json")))
         self.result = result
         self.calls = 0
 
     def classify_with_llm(
         self,
-        messages: list[dict[str, str]],
-        allowed_categories: list[str] | None = None,
+        _messages: list[dict[str, str]],
+        _allowed_categories: list[str] | None = None,
+        _server_context: list[dict[str, object]] | None = None,
     ) -> dict[str, tuple[float, str]]:
         self.calls += 1
         return self.result
@@ -514,30 +543,30 @@ def test_compound_prompt_returns_multiple_categories_and_servers(tmp_path: Path)
 
 
 def test_try_parse_json_object_accepts_markdown_fenced_json() -> None:
-        payload = """```json
-        {
-            "category": "database",
-            "confidence": 0.92,
-            "rationale": "SQL intent"
-        }
-        ```"""
+    payload = """```json
+    {
+        "category": "database",
+        "confidence": 0.92,
+        "rationale": "SQL intent"
+    }
+    ```"""
 
-        parsed = _try_parse_json_object(payload)
-        assert parsed is not None
-        assert parsed["category"] == "database"
+    parsed = _try_parse_json_object(payload)
+    assert parsed is not None
+    assert parsed["category"] == "database"
 
 
 def test_try_parse_json_object_recovers_trailing_commas() -> None:
-        payload = """{
-            "categories": [
-                {
-                    "category": "database",
-                    "confidence": 0.9,
-                    "rationale": "SQL intent",
-                },
-            ],
-        }"""
+    payload = """{
+        "categories": [
+            {
+                "category": "database",
+                "confidence": 0.9,
+                "rationale": "SQL intent",
+            },
+        ],
+    }"""
 
-        parsed = _try_parse_json_object(payload)
-        assert parsed is not None
-        assert "categories" in parsed
+    parsed = _try_parse_json_object(payload)
+    assert parsed is not None
+    assert "categories" in parsed

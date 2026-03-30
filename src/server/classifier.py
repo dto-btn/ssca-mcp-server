@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
-import time
 from dataclasses import dataclass
 
 try:
@@ -134,9 +132,6 @@ class LlmClassifierPlugin:
         """
         self.settings = settings
         self._client = None
-        self._credential = None
-        self._cached_proxy_token: str | None = None
-        self._cached_proxy_token_expires_on: int = 0
         self._enabled = settings.enable_llm_classifier
         if not self._enabled:
             return
@@ -147,29 +142,20 @@ class LlmClassifierPlugin:
             return
 
         try:
-            from azure.identity import DefaultAzureCredential
             from openai import OpenAI
 
             base_url = settings.litellm_proxy_url.rstrip("/")
             self._client = OpenAI(
                 base_url=base_url,
-                api_key=settings.litellm_proxy_api_key or "#unused-for-embedded-proxy",
+                api_key=settings.litellm_proxy_api_key or "#unused-when-auth-via-bearer",
                 timeout=settings.llm_timeout_seconds,
             )
-
-            if not settings.litellm_proxy_bearer_token and settings.litellm_proxy_scope:
-                credential_kwargs: dict[str, object] = {}
-                tenant_hint = os.getenv("AZURE_TENANT_ID") or os.getenv("AZURE_AD_TENANT_ID")
-                if tenant_hint:
-                    credential_kwargs["shared_cache_tenant_id"] = tenant_hint
-                    credential_kwargs["interactive_browser_tenant_id"] = tenant_hint
-                self._credential = DefaultAzureCredential(**credential_kwargs)
         except Exception:
             logger.exception("Failed to initialize LiteLLM proxy client for LLM classifier.")
             self._client = None
 
     def _resolve_auth_headers(self) -> dict[str, str]:
-        """Build per-request auth headers for embedded LiteLLM proxy calls."""
+        """Build per-request auth headers for standalone LiteLLM proxy calls."""
         headers: dict[str, str] = {}
         if self.settings.litellm_proxy_api_key:
             headers["x-api-key"] = self.settings.litellm_proxy_api_key
@@ -177,21 +163,6 @@ class LlmClassifierPlugin:
         static_bearer = self.settings.litellm_proxy_bearer_token
         if static_bearer:
             headers["Authorization"] = f"Bearer {static_bearer}"
-            return headers
-
-        if self._credential is None or not self.settings.litellm_proxy_scope:
-            return headers
-
-        try:
-            now = int(time.time())
-            if not self._cached_proxy_token or now >= (self._cached_proxy_token_expires_on - 120):
-                token = self._credential.get_token(self.settings.litellm_proxy_scope)
-                self._cached_proxy_token = token.token
-                self._cached_proxy_token_expires_on = int(token.expires_on)
-            if self._cached_proxy_token:
-                headers["Authorization"] = f"Bearer {self._cached_proxy_token}"
-        except Exception:
-            logger.exception("Failed acquiring bearer token for LiteLLM proxy request.")
 
         return headers
 
