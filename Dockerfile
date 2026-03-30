@@ -1,27 +1,36 @@
-FROM python:3.12-slim
+# Use a slim Python 3.12 image as the base
+FROM python:3.12-slim-bookworm
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+# Install 'uv' for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# Set the working directory
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1
 
-RUN pip install --no-cache-dir uv
+# Copy dependency files first to leverage Docker cache
+COPY pyproject.toml .
+# Copy lockfile as well
+COPY uv.lock* .
 
-COPY pyproject.toml uv.lock README.md ./
+# Install dependencies using uv
+# --no-install-project ensures we only install dependencies first
+RUN uv sync --frozen --no-install-project --no-dev
+
+# Copy the source code and other necessary files
+COPY src/ src/
+COPY mcp_registry.json .
+
+# Install the project itself
 RUN uv sync --frozen --no-dev
 
-COPY src ./src
-COPY mcp_registry.json ./mcp_registry.json
+# Set environment variables for the orchestrator
+ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE 9000
+# Expose the orchestrator port
+EXPOSE 8000
 
-ENV ORCHESTRATOR_HOST=0.0.0.0 \
-    ORCHESTRATOR_PORT=9000 \
-    ORCHESTRATOR_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173,https://localhost:8080,https://127.0.0.1:8080,https://localhost:5173,https://127.0.0.1:5173
-
-CMD ["sh", "-c", "uv run uvicorn src.server.server:app --host 0.0.0.0 --port ${PORT:-${ORCHESTRATOR_PORT:-9000}}"]
+# Command to run the orchestrator using uvicorn
+CMD ["uv", "run", "uvicorn", "src.server.server:app", "--host", "0.0.0.0", "--port", "8000"]
