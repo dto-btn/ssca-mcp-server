@@ -58,6 +58,43 @@ def test_load_settings_uses_litellm_master_key_as_api_key(monkeypatch) -> None:
     assert settings.litellm_proxy_api_key == "test-master-key"
 
 
+def test_load_settings_normalizes_legacy_embedded_proxy_url(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_LITELLM_PROXY_URL", "http://127.0.0.1:4000/proxy/litellm/v1")
+
+    settings = load_settings()
+
+    assert settings.litellm_proxy_url == "http://127.0.0.1:4000/v1"
+
+
+def test_llm_classifier_resolve_auth_headers_include_caller_identity(tmp_path: Path) -> None:
+    settings = OrchestratorSettings(
+        registry_path=tmp_path / "registry.json",
+        max_messages=10,
+        min_confidence=0.4,
+        enable_llm_classifier=True,
+        litellm_proxy_url="http://localhost:4000/v1",
+        litellm_proxy_bearer_token="b1",
+        litellm_proxy_api_key="k1",
+        llm_model="gpt-4o",
+        llm_timeout_seconds=8.0,
+        verbose_logging=False,
+        redact_sensitive_tokens=True,
+        max_message_chars=4000,
+        max_total_chars=20000,
+        enable_hot_reload=False,
+        update_registry_enabled=True,
+        admin_secret="secret",
+    )
+
+    plugin = LlmClassifierPlugin(settings)
+    headers = plugin._resolve_auth_headers()
+
+    assert headers["x-caller-system"] == "orchestrator"
+    assert headers["x-caller-component"] == "ssca-mcp-server-classifier"
+    assert headers["x-api-key"] == "k1"
+    assert headers["Authorization"] == "Bearer b1"
+
+
 def write_registry(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

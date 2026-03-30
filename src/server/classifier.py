@@ -156,7 +156,10 @@ class LlmClassifierPlugin:
 
     def _resolve_auth_headers(self) -> dict[str, str]:
         """Build per-request auth headers for standalone LiteLLM proxy calls."""
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {
+            "x-caller-system": "orchestrator",
+            "x-caller-component": "ssca-mcp-server-classifier",
+        }
         if self.settings.litellm_proxy_api_key:
             headers["x-api-key"] = self.settings.litellm_proxy_api_key
 

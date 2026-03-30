@@ -1,0 +1,23 @@
+services:
+  ssca-mcp-server:
+    container_name: ssca-mcp-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ssca-mcp-server:local
+    env_file:
+      - .env
+    environment:
+      ORCHESTRATOR_HOST: 0.0.0.0
+      ORCHESTRATOR_PORT: 9000
+      PORT: 9000
+      ORCHESTRATOR_LITELLM_PROXY_URL: http://litellm-proxy-standalone-litellm-proxy-standalone-1:4000/v1
+    ports:
+      - "8000:9000"
+    restart: unless-stopped
+    networks:
+      - litellm-proxy-standalone_default
+
+networks:
+  litellm-proxy-standalone_default:
+    external: true
