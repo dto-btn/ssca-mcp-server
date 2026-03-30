@@ -9,11 +9,11 @@ services:
       - .env
     environment:
       ORCHESTRATOR_HOST: 0.0.0.0
-      ORCHESTRATOR_PORT: 9000
-      PORT: 9000
+      ORCHESTRATOR_PORT: 8000
+      PORT: 8000
       ORCHESTRATOR_LITELLM_PROXY_URL: http://litellm-proxy-standalone-litellm-proxy-standalone-1:4000/v1
     ports:
-      - "8000:9000"
+      - "8000:8000"
     restart: unless-stopped
     networks:
       - litellm-proxy-standalone_default
