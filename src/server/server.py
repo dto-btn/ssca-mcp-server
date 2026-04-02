@@ -52,8 +52,8 @@ def _log_startup_config_summary() -> None:
         return
 
     missing: list[str] = []
-    if not settings.azure_openai_endpoint:
-        missing.append("AZURE_OPENAI_ENDPOINT")
+    if not settings.litellm_proxy_url:
+        missing.append("ORCHESTRATOR_LITELLM_PROXY_URL")
     if not settings.llm_model:
         missing.append("ORCHESTRATOR_LLM_MODEL")
 
@@ -66,9 +66,9 @@ def _log_startup_config_summary() -> None:
         return
 
     logger.info(
-        "LLM classifier enabled (model=%s, api_version=%s, timeout_seconds=%.1f, min_confidence=%.2f).",
+        "LLM classifier enabled (proxy_url=%s, model=%s, timeout_seconds=%.1f, min_confidence=%.2f).",
+        settings.litellm_proxy_url,
         settings.llm_model,
-        settings.azure_openai_api_version,
         settings.llm_timeout_seconds,
         settings.min_confidence,
     )

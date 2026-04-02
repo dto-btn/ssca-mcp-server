@@ -1,36 +1,45 @@
-# Orchestrator MCP Server
+# SSCA MCP Server
 
-An MCP orchestrator server that classifies chat context and recommends which downstream MCP server should handle the request.
+A production-ready MCP orchestrator that classifies user intent and recommends the best downstream MCP server for execution.
 
-It does **not** depend on `categoryService.info`.
+This service is standalone and does not depend on categoryService.info.
 
-## Features
+## Why This Project
 
-- LLM-first context classification (Azure OpenAI) with keyword fallback.
-- Keyword/regex-style context classification with recency, density, and weighting.
-- Ranked route suggestions across registered MCP servers.
-- Safe fallback with clarifying question suggestions.
-- Extensible LLM-classifier plug-in interface (`ENABLE_LLM_CLASSIFIER=true`).
-- MCP tools:
-	- `classify_context`
-	- `suggest_route`
-	- `route_and_forward` (phase-1 stub)
-	- `update_registry` (optional admin-only)
-- Registry schema validation on load/update.
-- Optional registry hot reload.
+- Improves tool routing quality by combining deterministic keyword scoring with optional LLM-first classification.
+- Reduces failed tool calls with confidence thresholds, fallbacks, and clarifying-question hints.
+- Provides both MCP and HTTP surfaces for chat clients and playground integrations.
+- Supports safe runtime operations with registry validation, hot reload, and optional admin-gated updates.
 
-## Project Layout
+## Key Capabilities
 
-- `src/server/server.py`: MCP server and tool endpoints.
-- `src/server/config.py`: environment-driven settings.
-- `src/server/schemas.py`: registry schema models.
-- `src/server/registry.py`: registry load/save/update with locking.
-- `src/server/classifier.py`: scoring/classification engine.
-- `src/server/router.py`: route recommendation and fallback logic.
-- `mcp_registry.json`: default registry.
-- `tests/test_orchestrator.py`: unit/integration tests.
+- LLM-first intent classification through LiteLLM proxy with deterministic keyword fallback.
+- Multi-category routing support with tie handling and route ranking.
+- Built-in fallback behavior when intent confidence is low.
+- Registry-backed server metadata, aliases, and routing rules.
+- Streamable MCP HTTP app with CORS support.
+- Optional HTTP helper endpoint for pre-routing workflows.
 
-## Run
+## Architecture Overview
+
+- Classification and routing engine: src/server/classifier.py, src/server/router.py
+- Registry and schema handling: src/server/registry.py, src/server/schemas.py
+- Runtime settings: src/server/config.py
+- Server entrypoint (MCP + HTTP): src/server/server.py
+
+High-level flow:
+
+1. Client sends message history.
+2. Service classifies intent (LLM-first when enabled, otherwise keyword).
+3. Service ranks downstream MCP server candidates.
+4. Service returns recommendations or safe fallback guidance.
+
+## Quick Start
+
+Requirements:
+
+- Python 3.12+
+- uv
 
 Install dependencies:
 
@@ -38,244 +47,235 @@ Install dependencies:
 uv sync --all-groups
 ```
 
-Run server in MCP inspector/dev mode:
-
-```bash
-uv run mcp dev src/server/server.py
-```
-
-Run server for browser clients (Playground) with CORS-enabled MCP streamable HTTP app:
-
-```bash
-ORCHESTRATOR_ALLOWED_ORIGINS="https://localhost:8080,https://127.0.0.1:8080" \
-ORCHESTRATOR_TLS_CERT_FILE="./certs/localhost.crt" \
-ORCHESTRATOR_TLS_KEY_FILE="./certs/localhost.key" \
-uv run uvicorn src.server.server:app --host 127.0.0.1 --port 8000
-```
-
-This serves the MCP streamable HTTP transport (`/mcp`) with CORS headers so the frontend can call orchestrator tools directly.
-
-Or use the one-command launcher script (recommended):
-
-```bash
-./scripts/start-playground-orchestrator.sh
-```
-
-Optional overrides:
-
-```bash
-ORCHESTRATOR_PORT=8010 ORCHESTRATOR_ALLOWED_ORIGINS="https://localhost:8080" ./scripts/start-playground-orchestrator.sh
-```
-
-### Local self-signed TLS (dev/test)
-
-Generate a local self-signed cert and key:
-
-```bash
-./scripts/generate-local-self-signed-cert.sh
-```
-
-If `mkcert` is installed, the script will generate a locally trusted cert automatically.
-If `mkcert` is not installed, it falls back to a plain self-signed cert that browsers may reject until trusted manually.
-
-Then start the orchestrator over HTTPS:
-
-```bash
-./scripts/start-playground-orchestrator.sh
-```
-
-The launcher auto-uses `./certs/localhost.crt` and `./certs/localhost.key` when present.
-
-If your browser blocks the cert, trust it in your local trust store for smoother MCP testing.
-
-## MCP Tools Contract
-
-### `classify_context`
-
-Input:
-
-```json
-{
-	"messages": [{ "role": "user", "content": "..." }],
-	"locale": "en-CA",
-	"metadata": { "request_id": "abc" }
-}
-```
-
-Output:
-
-```json
-{
-	"categories": [
-		{ "name": "database", "confidence": 0.84, "matched_keywords": ["sql", "query"] }
-	],
-	"explanation": "Top category selected from keyword evidence.",
-	"timestamp": "2026-02-24T00:00:00Z"
-}
-```
-
-### `suggest_route`
-
-Input:
-
-```json
-{
-	"messages": [{ "role": "user", "content": "..." }],
-	"max_recommendations": 3,
-	"require_single_best": false
-}
-```
-
-Output:
-
-```json
-{
-	"recommendations": [
-		{
-			"mcp_server_id": "db_mcp",
-			"endpoint": "https://db-mcp.example.com/mcp",
-			"category": "database",
-			"confidence": 0.88,
-			"matched_keywords": ["sql", "table"],
-			"rationale": "Matched keywords ..."
-		}
-	],
-	"fallback": {
-		"reason": "No clear match. Ask a clarifying question.",
-		"suggestions_for_user": ["Are you trying to query a database or search the web?"]
-	},
-	"plan": null,
-	"timestamp": "2026-02-24T00:00:00Z"
-}
-```
-
-### `route_and_forward` (phase 1)
-
-- Returns selected route plus a mock forwarding response.
-- Provides a `plan` extension object for future chained workflows.
-
-### `update_registry` (optional admin-only)
-
-- Disabled by default.
-- Enable via `ORCHESTRATOR_ENABLE_UPDATE_REGISTRY=true`.
-- If `ORCHESTRATOR_ADMIN_SECRET` is set, `admin_secret` must match.
-
-## Registry Schema
-
-Path:
-- `ORCHESTRATOR_REGISTRY_PATH` or fallback `./mcp_registry.json`
-
-Example is provided in `mcp_registry.json` and follows:
-
-```json
-{
-	"version": "1.0",
-	"mcp_servers": [
-		{
-			"id": "web_search_mcp",
-			"endpoint": "https://web-search-mcp.example.com/mcp",
-			"categories": ["web-search", "news", "research"],
-			"tools": ["search", "get_page"],
-			"keywords": ["search", "google", "web", "news", "article", "research", "find online"],
-			"weight": 1.0
-		}
-	],
-	"category_aliases": { "web": "web-search" },
-	"routing_rules": {
-		"max_recommendations": 3,
-		"tie_breaker": "weight_then_keyword_density",
-		"default_fallback": {
-			"category": "general",
-			"message": "No clear match. Ask a clarifying question."
-		}
-	}
-}
-```
-
-If missing, the file is auto-created with empty `mcp_servers` and sensible routing defaults.
-
-## Configuration
-
-Quick start:
+Copy environment template:
 
 ```bash
 cp .env.example .env
 ```
 
-Use the same Azure OpenAI settings as SSC Assistant API:
-
-- Copy `AZURE_OPENAI_ENDPOINT` from `ssc-assistant/app/api/.env`
-- Copy deployment name(s): `GPT40_DEPLOYMENT_NAME` and/or `DEFAULT_DEPLOYMENT_NAME`
-- Copy `AZURE_AD_TENANT_ID` (and optionally `AZURE_AD_CLIENT_ID`) for the same Azure tenant context
-- Optionally set `ORCHESTRATOR_LLM_MODEL` to override deployment selection
-
-Authentication (orchestrator runs with its own credential context):
-
-- Local dev (recommended):
+Run in MCP dev mode:
 
 ```bash
-az login --use-device-code
+uv run mcp dev src/server/server.py
 ```
 
-- CI/service principal (optional): set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`
-- SSC Assistant naming is also accepted: `AZURE_AD_TENANT_ID`, `AZURE_AD_CLIENT_ID`
-
-- `ORCHESTRATOR_REGISTRY_PATH` (default: `./mcp_registry.json`)
-- `ORCHESTRATOR_MAX_MESSAGES` (default: `10`)
-- `ORCHESTRATOR_MIN_CONFIDENCE` (default: `0.4`)
-- `ENABLE_LLM_CLASSIFIER` (default: `false`)
-- `ORCHESTRATOR_LLM_BLEND_ALPHA` (default: `0.35`)
-- `AZURE_OPENAI_ENDPOINT` (required when `ENABLE_LLM_CLASSIFIER=true`)
-- `AZURE_OPENAI_VERSION` (default: `2024-05-01-preview`)
-- `ORCHESTRATOR_LLM_MODEL` (Azure deployment name; optional if `GPT40_DEPLOYMENT_NAME` or `DEFAULT_DEPLOYMENT_NAME` is set)
-- `ORCHESTRATOR_LLM_TIMEOUT_SECONDS` (default: `8.0`)
-- `VERBOSE_LOGGING` (default: `false`)
-- `ORCHESTRATOR_REDACT_SENSITIVE` (default: `true`)
-- `ORCHESTRATOR_MAX_MESSAGE_CHARS` (default: `4000`)
-- `ORCHESTRATOR_MAX_TOTAL_CHARS` (default: `20000`)
-- `ORCHESTRATOR_ENABLE_HOT_RELOAD` (default: `false`)
-- `ORCHESTRATOR_ENABLE_UPDATE_REGISTRY` (default: `false`)
-- `ORCHESTRATOR_ADMIN_SECRET` (optional)
-- `ORCHESTRATOR_TLS_CERT_FILE` (optional; enables local HTTPS when paired with key)
-- `ORCHESTRATOR_TLS_KEY_FILE` (optional; enables local HTTPS when paired with cert)
-
-## Tests
-
-Run:
+Run as HTTP server:
 
 ```bash
-uv run pytest
+uv run uvicorn src.server.server:app --host 0.0.0.0 --port 8000
 ```
 
-Coverage includes:
+## Endpoints And Transports
 
-- Keyword matching/scoring
-- Alias resolution
-- Confidence bounds
-- Tie-breaking and weights
-- Registry validation and error handling
-- Empty-registry fallback
-- Single strong-match prompts
-- Near-tie ranked output
-- Low-confidence disambiguation
-- Hot-reload behavior
+- MCP streamable HTTP transport: /mcp
+- HTTP routing helper endpoint: POST /orchestrator/suggest-route
 
-## How to Extend
+Example health-style check:
 
-- Add a new downstream MCP server by appending an entry to `mcp_registry.json` with:
-	- unique `id`
-	- `endpoint`
-	- `categories`, `tools`, `keywords`, `weight`
-- Add aliases in `category_aliases`.
-- Optional LLM classification:
-	- set `ENABLE_LLM_CLASSIFIER=true`
-	- configure `AZURE_OPENAI_ENDPOINT` and `ORCHESTRATOR_LLM_MODEL`
-	- flow: LLM chooses category first; if it returns `generic` (or low confidence/error), keyword scoring runs; if keywords still do not match, the final fallback category remains `generic`.
+```bash
+curl -i http://localhost:8000/mcp
+```
+
+Example routing helper call:
+
+```bash
+curl -s http://localhost:8000/orchestrator/suggest-route \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role": "user", "content": "Find SQL schema info for customer table"}],
+    "max_recommendations": 3,
+    "require_single_best": false
+  }'
+```
+
+## Docker
+
+Build image:
+
+```bash
+docker build -t ssca-orchestrator:local .
+```
+
+Run container:
+
+```bash
+docker run --rm -p 9000:9000 \
+  --env-file .env \
+  -e ORCHESTRATOR_HOST=0.0.0.0 \
+  -e ORCHESTRATOR_PORT=9000 \
+  ssca-orchestrator:local
+```
 
 Notes:
-	- The orchestrator uses Azure Identity `DefaultAzureCredential` for Azure OpenAI tokens, matching SSC Assistant API behavior.
-	- Directly reusing browser MSAL session storage from `app/frontend` is not supported across processes; use shared Azure env settings and identity context instead.
 
-## Documentation
+- Container command honors PORT when provided by hosting platforms.
+- Ensure host binding is 0.0.0.0 and published port mapping is correct.
 
-- [Model Context Protocol Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+## Configuration
+
+### Required For LLM Classification
+
+| Variable | Description | Default |
+|---|---|---|
+| ENABLE_LLM_CLASSIFIER | Enables LLM-first classification | false |
+| ORCHESTRATOR_LITELLM_PROXY_URL | LiteLLM/OpenAI-compatible base URL | http://localhost:4000/v1 |
+| ORCHESTRATOR_LLM_MODEL | Model id exposed by LiteLLM | none |
+
+Authentication for LiteLLM proxy:
+
+- ORCHESTRATOR_LITELLM_PROXY_API_KEY
+- or LITELLM_MASTER_KEY (fallback)
+- optional ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN
+
+### Core Runtime Settings
+
+| Variable | Description | Default |
+|---|---|---|
+| ORCHESTRATOR_REGISTRY_PATH | Registry file path | ./mcp_registry.json |
+| ORCHESTRATOR_MAX_MESSAGES | Max message turns used for scoring | 10 |
+| ORCHESTRATOR_MIN_CONFIDENCE | Confidence threshold for recommendations | 0.4 |
+| ORCHESTRATOR_LLM_TIMEOUT_SECONDS | LLM call timeout | 8.0 |
+| ORCHESTRATOR_MAX_MESSAGE_CHARS | Per-message character cap | 4000 |
+| ORCHESTRATOR_MAX_TOTAL_CHARS | Total context character cap | 20000 |
+| ORCHESTRATOR_ENABLE_HOT_RELOAD | Reload registry when file changes | false |
+| ORCHESTRATOR_ENABLE_UPDATE_REGISTRY | Enables update_registry tool | false |
+| ORCHESTRATOR_ADMIN_SECRET | Shared secret for update_registry tool | unset |
+| VERBOSE_LOGGING | Enables verbose logs | false |
+| ORCHESTRATOR_REDACT_SENSITIVE | Redacts sensitive tokens in logs | true |
+
+### HTTP And Local TLS Settings
+
+| Variable | Description | Default |
+|---|---|---|
+| ORCHESTRATOR_ALLOWED_ORIGINS | CORS allow list (comma-separated) | localhost dev origins |
+| ORCHESTRATOR_HOST | HTTP bind host | 0.0.0.0 |
+| ORCHESTRATOR_PORT | HTTP bind port | 8000 |
+| ORCHESTRATOR_GRACEFUL_SHUTDOWN_SECONDS | Uvicorn graceful shutdown timeout | 2 |
+| ORCHESTRATOR_TLS_CERT_FILE | Local TLS cert file | unset |
+| ORCHESTRATOR_TLS_KEY_FILE | Local TLS key file | unset |
+| ORCHESTRATOR_AUTO_TLS | Auto-load certs/localhost.* in script | false |
+
+## MCP Tool Contracts
+
+### classify_context
+
+Input:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "..." }],
+  "locale": "en-CA",
+  "metadata": { "request_id": "abc" }
+}
+```
+
+Output includes categories, confidence, explanation, classification_method, and timestamp.
+
+### suggest_route
+
+Input:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "..." }],
+  "max_recommendations": 3,
+  "require_single_best": false
+}
+```
+
+Output includes ranked recommendations, optional fallback block, optional disambiguation hints, and timestamp.
+
+### route_and_forward
+
+- Phase-1 stub that returns route decision plus a mock forwarding envelope.
+
+### update_registry
+
+- Disabled by default.
+- Enabled with ORCHESTRATOR_ENABLE_UPDATE_REGISTRY=true.
+- If ORCHESTRATOR_ADMIN_SECRET is set, caller must provide matching admin_secret.
+
+## Registry Model
+
+Registry path resolution:
+
+- ORCHESTRATOR_REGISTRY_PATH
+- fallback: ./mcp_registry.json
+
+The registry defines:
+
+- mcp_servers: endpoint, categories, tools, keywords, weight
+- category_aliases: alternate terms that map to canonical categories
+- routing_rules: max_recommendations, tie_breaker, default_fallback
+
+If the file does not exist, the service creates a valid default scaffold.
+
+## Production Readiness Checklist
+
+- Set explicit CORS origins (avoid permissive defaults).
+- Use a strong API key or bearer token between orchestrator and LiteLLM proxy.
+- Keep ORCHESTRATOR_ENABLE_UPDATE_REGISTRY disabled unless operationally required.
+- If update_registry is enabled, set ORCHESTRATOR_ADMIN_SECRET.
+- Run with immutable image tags and pinned lockfile updates.
+- Monitor logs for fallback and low-confidence routing patterns.
+- Add CI checks for tests and linting before release.
+
+## Local HTTPS For Browser Testing
+
+Generate certs:
+
+```bash
+./scripts/generate-local-self-signed-cert.sh
+```
+
+Start with helper script:
+
+```bash
+./scripts/start-playground-orchestrator.sh
+```
+
+Example overrides:
+
+```bash
+ORCHESTRATOR_PORT=8010 ORCHESTRATOR_ALLOWED_ORIGINS="https://localhost:8080" ./scripts/start-playground-orchestrator.sh
+```
+
+## Testing
+
+Run tests:
+
+```bash
+uv run pytest -q
+```
+
+Current suite covers:
+
+- intent scoring and confidence bounds
+- alias resolution
+- tie and ambiguity handling
+- fallback behavior
+- registry validation and hot reload
+- LLM classifier plugin behavior
+
+## Development Notes
+
+- Primary test file: tests/test_orchestrator.py
+- Lint/editor settings: .vscode/settings.json
+- Dependency lock updates: uv lock
+
+## Extending The Router
+
+To add a new downstream MCP server, update mcp_registry.json with:
+
+- id
+- endpoint
+- categories
+- tools
+- keywords
+- weight
+
+Then validate behavior with targeted tests in tests/test_orchestrator.py.
+
+## References
+
+- Model Context Protocol Python SDK: https://github.com/modelcontextprotocol/python-sdk

@@ -2,6 +2,9 @@
     "editor.rulers": [
         /*80,*/120
     ],
+    "python.analysis.extraPaths": [
+        "./src"
+    ],
     "pylint.args": [
         "--rcfile=.vscode/pylintrc"
     ],

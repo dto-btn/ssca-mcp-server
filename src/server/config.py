@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _to_bool(value: str | None, default: bool = False) -> bool:
@@ -42,14 +43,44 @@ def _first_non_empty(*values: str | None) -> str | None:
     return None
 
 
+def _normalize_litellm_proxy_url(value: str | None) -> str | None:
+    """Normalize legacy embedded-proxy URL shapes to standalone LiteLLM `/v1`.
+
+    Older local setups used paths like `/proxy/litellm/v1` behind another
+    service. The standalone LiteLLM proxy serves OpenAI-compatible endpoints
+    directly under `/v1`.
+    """
+    if value is None:
+        return None
+
+    raw = value.strip()
+    if not raw:
+        return None
+
+    parts = urlsplit(raw)
+    path = (parts.path or "").strip()
+    normalized_path = path
+
+    if "/proxy/litellm/v1" in path:
+        normalized_path = path.replace("/proxy/litellm/v1", "/v1")
+    elif path.endswith("/proxy/litellm"):
+        normalized_path = path[: -len("/proxy/litellm")] + "/v1"
+
+    if normalized_path != path:
+        return urlunsplit((parts.scheme, parts.netloc, normalized_path, parts.query, parts.fragment))
+
+    return raw
+
+
 @dataclass(frozen=True)
 class OrchestratorSettings:
     registry_path: Path
     max_messages: int
     min_confidence: float
     enable_llm_classifier: bool
-    azure_openai_endpoint: str | None
-    azure_openai_api_version: str
+    litellm_proxy_url: str | None
+    litellm_proxy_bearer_token: str | None
+    litellm_proxy_api_key: str | None
     llm_model: str | None
     llm_timeout_seconds: float
     verbose_logging: bool
@@ -64,14 +95,30 @@ class OrchestratorSettings:
 def load_settings() -> OrchestratorSettings:
     """Load orchestrator settings from environment with safe bounds."""
     registry_path = Path(os.getenv("ORCHESTRATOR_REGISTRY_PATH", "./mcp_registry.json")).expanduser().resolve()
+    litellm_proxy_url = _normalize_litellm_proxy_url(
+        _first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_URL"),
+            os.getenv("LITELLM_PROXY_URL"),
+            os.getenv("LITELLM_BASE_URL"),
+            "http://localhost:4000/v1",
+        )
+    )
 
     return OrchestratorSettings(
         registry_path=registry_path,
         max_messages=max(1, _to_int(os.getenv("ORCHESTRATOR_MAX_MESSAGES"), 10)),
         min_confidence=max(0.0, min(1.0, _to_float(os.getenv("ORCHESTRATOR_MIN_CONFIDENCE"), 0.4))),
         enable_llm_classifier=_to_bool(os.getenv("ENABLE_LLM_CLASSIFIER"), False),
-        azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        azure_openai_api_version=os.getenv("AZURE_OPENAI_VERSION", "2024-05-01-preview"),
+        litellm_proxy_url=litellm_proxy_url,
+        litellm_proxy_bearer_token=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN"),
+            os.getenv("LITELLM_PROXY_BEARER_TOKEN"),
+        ),
+        litellm_proxy_api_key=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_PROXY_API_KEY"),
+            os.getenv("LITELLM_PROXY_API_KEY"),
+            os.getenv("LITELLM_MASTER_KEY"),
+        ),
         llm_model=_first_non_empty(
             os.getenv("ORCHESTRATOR_LLM_MODEL"),
             os.getenv("GPT40_DEPLOYMENT_NAME"),
