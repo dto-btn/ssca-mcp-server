@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from dataclasses import dataclass
 
@@ -26,6 +25,34 @@ logger = get_logger("orchestrator.classifier")
 
 MAX_LLM_CATEGORIES = 3
 MAX_LLM_RATIONALE_CHARS = 160
+
+
+def _extract_response_text(response: object) -> str:
+    """Extract assistant text from OpenAI Responses API payload variants."""
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+
+    output_items = getattr(response, "output", None)
+    if isinstance(output_items, list):
+        chunks: list[str] = []
+        for item in output_items:
+            item_type = getattr(item, "type", None)
+            if item_type != "message":
+                continue
+            contents = getattr(item, "content", None)
+            if not isinstance(contents, list):
+                continue
+            for content in contents:
+                content_type = getattr(content, "type", None)
+                if content_type in {"output_text", "text"}:
+                    text_value = getattr(content, "text", None)
+                    if isinstance(text_value, str) and text_value:
+                        chunks.append(text_value)
+        if chunks:
+            return "".join(chunks)
+
+    return ""
 
 
 def _try_parse_json_object(content: str) -> dict[str, object] | None:
@@ -97,7 +124,7 @@ class ServerScore:
 
 class LlmClassifierPlugin:
     def __init__(self, settings: OrchestratorSettings):
-        """Initialize Azure OpenAI client state used for intent category inference.
+        """Initialize LiteLLM proxy client used for intent category inference.
 
         The plugin is intentionally resilient: configuration problems or SDK import
         failures only disable LLM classification and allow deterministic keyword
@@ -108,44 +135,39 @@ class LlmClassifierPlugin:
         self._enabled = settings.enable_llm_classifier
         if not self._enabled:
             return
-        if not settings.azure_openai_endpoint or not settings.llm_model:
+        if not settings.litellm_proxy_url:
             logger.warning(
-                "LLM classifier enabled but not configured (missing AZURE_OPENAI_ENDPOINT or ORCHESTRATOR_LLM_MODEL)."
+                "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
             )
             return
 
         try:
-            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-            from openai import AzureOpenAI
+            from openai import OpenAI
 
-            tenant_hint = os.getenv("AZURE_TENANT_ID") or os.getenv("AZURE_AD_TENANT_ID")
-            client_hint = os.getenv("AZURE_CLIENT_ID") or os.getenv("AZURE_AD_CLIENT_ID")
-            if client_hint and client_hint.startswith("api://"):
-                client_hint = client_hint.removeprefix("api://")
-
-            credential_kwargs: dict[str, object] = {}
-            if tenant_hint:
-                credential_kwargs["shared_cache_tenant_id"] = tenant_hint
-                credential_kwargs["interactive_browser_tenant_id"] = tenant_hint
-            if client_hint and re.fullmatch(r"[0-9a-fA-F-]{32,36}", client_hint):
-                credential_kwargs["managed_identity_client_id"] = client_hint
-
-            credential = DefaultAzureCredential(**credential_kwargs)
-
-            token_provider = get_bearer_token_provider(
-                credential,
-                "https://cognitiveservices.azure.com/.default",
-            )
-
-            self._client = AzureOpenAI(
-                api_version=settings.azure_openai_api_version,
-                azure_endpoint=settings.azure_openai_endpoint,
-                azure_ad_token_provider=token_provider,
+            base_url = settings.litellm_proxy_url.rstrip("/")
+            self._client = OpenAI(
+                base_url=base_url,
+                api_key=settings.litellm_proxy_api_key or "#unused-when-auth-via-bearer",
                 timeout=settings.llm_timeout_seconds,
             )
         except Exception:
-            logger.exception("Failed to initialize Azure OpenAI client for LLM classifier.")
+            logger.exception("Failed to initialize LiteLLM proxy client for LLM classifier.")
             self._client = None
+
+    def _resolve_auth_headers(self) -> dict[str, str]:
+        """Build per-request auth headers for standalone LiteLLM proxy calls."""
+        headers: dict[str, str] = {
+            "x-caller-system": "orchestrator",
+            "x-caller-component": "ssca-mcp-server-classifier",
+        }
+        if self.settings.litellm_proxy_api_key:
+            headers["x-api-key"] = self.settings.litellm_proxy_api_key
+
+        static_bearer = self.settings.litellm_proxy_bearer_token
+        if static_bearer:
+            headers["Authorization"] = f"Bearer {static_bearer}"
+
+        return headers
 
     def classify_with_llm(
         self,
@@ -153,7 +175,7 @@ class LlmClassifierPlugin:
         allowed_categories: list[str] | None = None,
         server_context: list[dict[str, object]] | None = None,
     ) -> dict[str, tuple[float, str]]:
-        """Classify conversation intent into one or more categories using Azure OpenAI.
+        """Classify conversation intent into categories via LiteLLM Responses API.
 
         Returns a map of ``category -> (confidence, rationale)``. If anything fails,
         the method returns an empty result so callers can fall back to keyword scoring.
@@ -200,9 +222,9 @@ class LlmClassifierPlugin:
                 server_context_json = "[]"
 
         try:
-            completion = self._client.chat.completions.create(
+            completion = self._client.responses.create(
                 model=self.settings.llm_model,
-                messages=[
+                input=[
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
@@ -213,10 +235,11 @@ class LlmClassifierPlugin:
                     },
                 ],
                 temperature=0,
-                max_tokens=260,
-                response_format={"type": "json_object"},
+                max_output_tokens=260,
+                text={"format": {"type": "json_object"}},
+                extra_headers=self._resolve_auth_headers(),
             )
-            content = (completion.choices[0].message.content or "{}").strip()
+            content = (_extract_response_text(completion) or "{}").strip()
             parsed = _try_parse_json_object(content)
             if parsed is None:
                 logger.warning("LLM classifier returned non-JSON payload; using keyword fallback.")
