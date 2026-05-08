@@ -290,6 +290,11 @@ def simple_stem(token: str) -> str:
     for suffix in ("ing", "ed", "es", "s"):
         if token.endswith(suffix) and len(token) > len(suffix) + 2:
             return token[: -len(suffix)]
+    # French and mixed-language prompts often differ only by trailing "e"
+    # (for example "demande" vs "demandes"). Trimming a terminal "e"
+    # improves recall for keyword routing without needing heavy stemming.
+    if token.endswith("e") and len(token) > 4:
+        return token[:-1]
     return token
 
 

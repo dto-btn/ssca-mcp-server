@@ -323,6 +323,54 @@ def test_prompt_with_eps_routes_to_pmcoe(tmp_path: Path) -> None:
     assert lower_result["recommendations"][0]["mcp_server_id"] == "pmcoe_mcp"
 
 
+def test_french_business_request_query_routes_to_bits(tmp_path: Path) -> None:
+    reg_path = tmp_path / "bits_registry.json"
+    write_registry(
+        reg_path,
+        {
+            "version": "1.0",
+            "mcp_servers": [
+                {
+                    "id": "bits_mcp",
+                    "endpoint": "https://bits-mcp.example.com/mcp",
+                    "categories": ["bits", "business-request"],
+                    "tools": ["search_requests"],
+                    "keywords": ["demande d'affaires", "business request", "br"],
+                    "weight": 1.0,
+                },
+                {
+                    "id": "corporate_mcp",
+                    "endpoint": "https://corporate-mcp.example.com/mcp",
+                    "categories": ["corporate"],
+                    "tools": ["search_policy"],
+                    "keywords": ["policy", "intranet"],
+                    "weight": 1.0,
+                },
+            ],
+            "category_aliases": {},
+            "routing_rules": {
+                "max_recommendations": 3,
+                "tie_breaker": "weight_then_keyword_density",
+                "default_fallback": {
+                    "category": "general",
+                    "message": "No clear match. Ask a clarifying question.",
+                },
+            },
+        },
+    )
+
+    settings = make_settings(reg_path)
+    store = RegistryStore(settings)
+    router = OrchestratorRouter(settings=settings, registry_store=store)
+
+    result = router.suggest_route(
+        msg("Trouvez toutes les demandes d'affaires soumises au cours des 3 dernières semaines provenant du client SPAC.")
+    )
+
+    assert result["recommendations"]
+    assert result["recommendations"][0]["mcp_server_id"] == "bits_mcp"
+
+
 def test_multiple_near_ties_ranked_output(tmp_path: Path) -> None:
     router, _, _ = make_router(tmp_path)
     result = router.suggest_route(msg("Search web resources and query table schema to compare news data."), max_recommendations=3)
