@@ -3,7 +3,7 @@
   "mcp_servers": [
     {
       "id": "geds_mcp",
-      "endpoint": "https://geds-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
+      "endpoint": "https://geds-mcp.victoriousisland-7e101032.canadacentral.azurecontainerapps.io/mcp",
       "description": "Government employee directory lookups such as people search, contact details, manager relationships, and org charts.",
       "categories": ["geds", "directory", "employee"],
       "tools": ["find_employee", "lookup_contact", "get_org_chart"],
@@ -40,7 +40,7 @@
     },
     {
       "id": "bits_mcp",
-      "endpoint": "https://bits-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
+      "endpoint": "https://bits-mcp.victoriousisland-7e101032.canadacentral.azurecontainerapps.io/mcp",
       "description": "Business request and change-request workflows including request creation, tracking, and status retrieval.",
       "categories": ["bits", "business-request", "change-request"],
       "tools": ["create_request", "get_request_status", "search_requests"],
@@ -74,7 +74,7 @@
     },
     {
       "id": "pmcoe_mcp",
-      "endpoint": "https://pmcoe-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
+      "endpoint": "https://pmcoe-mcp.victoriousisland-7e101032.canadacentral.azurecontainerapps.io/mcp",
       "description": "Project management guidance and templates from PMCOE, including charters, plans, governance, and risk artifacts.",
       "categories": ["pmcoe", "project", "project-management"],
       "tools": ["get_project_template", "get_project_guidance", "search_pmcoe_resources"],
@@ -120,7 +120,7 @@
     },
     {
       "id": "corporate_mcp",
-      "endpoint": "https://myssc-mcp.blackground-73a376b6.canadacentral.azurecontainerapps.io/mcp",
+      "endpoint": "https://myssc-mcp.victoriousisland-7e101032.canadacentral.azurecontainerapps.io/mcp",
       "description": "Corporate MySSC intranet knowledge including policies, forms, HR, procurement, travel, payroll, and benefits guidance.",
       "categories": ["corporate", "myssc", "intranet"],
       "tools": ["search_policy", "find_form", "get_hr_guidance"],
