@@ -655,3 +655,97 @@ def test_try_parse_json_object_recovers_trailing_commas() -> None:
     parsed = _try_parse_json_object(payload)
     assert parsed is not None
     assert "categories" in parsed
+
+
+# ---------------------------------------------------------------------------
+# Error-path tests (T1–T4)
+# ---------------------------------------------------------------------------
+
+
+def test_corrupt_registry_json_raises_on_load(tmp_path: Path) -> None:
+    """T1: A registry file containing invalid JSON should surface an error rather than silently using stale state."""
+    bad_path = tmp_path / "corrupt.json"
+    bad_path.write_text("{not valid json", encoding="utf-8")
+    settings = make_settings(bad_path)
+    store = RegistryStore(settings)
+    router = OrchestratorRouter(settings=settings, registry_store=store)
+
+    # suggest_route must return an error envelope, not crash.
+    result = router.suggest_route(msg("anything"))
+    assert "error" in result
+
+
+def test_update_registry_wrong_secret_raises_and_leaves_registry_unchanged(tmp_path: Path) -> None:
+    """T2: A wrong admin secret must raise PermissionError and must not modify the persisted registry."""
+    _, store, reg_path = make_router(tmp_path)
+    original_text = reg_path.read_text(encoding="utf-8")
+
+    import pytest
+    with pytest.raises(PermissionError):
+        store.update_registry(upsert=[], remove=[], provided_secret="wrong-secret")
+
+    assert reg_path.read_text(encoding="utf-8") == original_text
+
+
+def test_update_registry_disabled_raises_permission_error(tmp_path: Path) -> None:
+    """T3: When update_registry_enabled=False the operation must be rejected unconditionally."""
+    reg_path = tmp_path / "registry.json"
+    write_registry(reg_path, sample_registry_payload())
+    settings = OrchestratorSettings(
+        registry_path=reg_path,
+        max_messages=10,
+        min_confidence=0.4,
+        enable_llm_classifier=False,
+        litellm_proxy_url="http://localhost:4000/v1",
+        litellm_proxy_bearer_token=None,
+        litellm_proxy_api_key=None,
+        llm_model=None,
+        llm_timeout_seconds=8.0,
+        verbose_logging=False,
+        redact_sensitive_tokens=True,
+        max_message_chars=4000,
+        max_total_chars=20000,
+        enable_hot_reload=False,
+        update_registry_enabled=False,
+        admin_secret="secret",
+    )
+    store = RegistryStore(settings)
+
+    import pytest
+    with pytest.raises(PermissionError, match="disabled"):
+        store.update_registry(upsert=[], remove=[], provided_secret="secret")
+
+
+def test_save_registry_is_atomic_and_round_trips(tmp_path: Path) -> None:
+    """T4: save_registry must produce a valid, parseable file that matches the model written."""
+    _, store, reg_path = make_router(tmp_path)
+    registry = store.load_registry()
+
+    # Mutate in-memory and save.
+    from server.schemas import RegistryServer
+    new_server = RegistryServer(
+        id="new_mcp",
+        endpoint="https://new-mcp.example.com/mcp",
+        categories=["test"],
+        tools=[],
+        keywords=["test"],
+        weight=1.0,
+    )
+    from server.schemas import RegistryModel
+    updated = RegistryModel(
+        version=registry.version,
+        mcp_servers=[*registry.mcp_servers, new_server],
+        category_aliases=registry.category_aliases,
+        routing_rules=registry.routing_rules,
+    )
+    store.save_registry(updated)
+
+    # File must be valid JSON and contain the new server.
+    raw = reg_path.read_text(encoding="utf-8")
+    parsed = json.loads(raw)
+    ids = [s["id"] for s in parsed["mcp_servers"]]
+    assert "new_mcp" in ids
+
+    # Reloading must reproduce the same state.
+    reloaded = store._read_registry_from_disk()
+    assert any(s.id == "new_mcp" for s in reloaded.mcp_servers)

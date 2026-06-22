@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import functools
 import json
 import os
 from datetime import UTC, datetime
+
+import anyio
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -105,49 +108,58 @@ async def orchestrator_lifespan(_: Starlette) -> AsyncIterator[None]:
         yield
 
 
+def _error_response(
+    code: str,
+    message: str,
+    details: str | None = None,
+) -> dict[str, object]:
+    """Build a uniform error envelope for both HTTP and MCP tool responses."""
+    err: dict[str, object] = {"code": code, "message": message}
+    if details is not None:
+        err["details"] = details
+    return {"error": err, "timestamp": datetime.now(UTC).isoformat()}
+
+
 async def suggest_route_http(request: Request) -> JSONResponse:
     """HTTP helper endpoint for frontend pre-routing before LLM invocation."""
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(
-            {
-                "error": {
-                    "code": "invalid_json",
-                    "message": "Malformed JSON payload",
-                },
-                "timestamp": datetime.now(UTC).isoformat(),
-            },
-            status_code=400,
+        return JSONResponse(_error_response("invalid_json", "Malformed JSON payload"), status_code=400)
+
+    if not isinstance(body, dict):
+        return JSONResponse(_error_response("invalid_input", "Request body must be a JSON object"), status_code=400)
+
+    try:
+        payload = SuggestRouteInput(
+            messages=[ChatMessage(**m) for m in (body.get("messages") or [])],
+            max_recommendations=body.get("max_recommendations"),
+            require_single_best=bool(body.get("require_single_best", False)),
+            locale=body.get("locale"),
+            metadata=body.get("metadata"),
         )
+    except Exception as exc:
+        return JSONResponse(_error_response("invalid_input", "Invalid request payload", str(exc)), status_code=400)
 
-    messages = body.get("messages") if isinstance(body, dict) else None
-    if not isinstance(messages, list) or len(messages) == 0:
-        return JSONResponse(
-            {
-                "error": {
-                    "code": "invalid_input",
-                    "message": "messages must be a non-empty list",
-                },
-                "timestamp": datetime.now(UTC).isoformat(),
-            },
-            status_code=400,
+    # router.suggest_route is synchronous (CPU/IO); run it in a thread so the
+    # Starlette event loop is not blocked while classification runs.
+    result = await anyio.to_thread.run_sync(
+        functools.partial(
+            router.suggest_route,
+            payload.messages,
+            max_recommendations=payload.max_recommendations,
+            require_single_best=payload.require_single_best,
+            locale=payload.locale,
+            metadata=payload.metadata,
         )
-
-    max_recommendations = body.get("max_recommendations") if isinstance(body, dict) else None
-    require_single_best = bool(body.get("require_single_best", False)) if isinstance(body, dict) else False
-    locale = body.get("locale") if isinstance(body, dict) else None
-    metadata = body.get("metadata") if isinstance(body, dict) else None
-
-    # This endpoint mirrors the MCP tool response shape so clients can switch
-    # transports without changing downstream parsing logic.
-    result = router.suggest_route(
-        messages=messages,
-        max_recommendations=max_recommendations,
-        require_single_best=require_single_best,
-        locale=locale,
-        metadata=metadata,
     )
+
+    # Return a meaningful HTTP status so clients can distinguish server errors
+    # from successful (possibly ambiguous) classification responses.
+    if "error" in result:
+        code = result["error"].get("code", "")
+        status = 400 if code in ("invalid_input", "invalid_json") else 500
+        return JSONResponse(result, status_code=status)
     return JSONResponse(result)
 
 
@@ -219,17 +231,9 @@ def classify_context(
     try:
         payload = ClassifyContextInput(messages=[ChatMessage(**m) for m in messages], locale=locale, metadata=metadata)
     except Exception as error:
-        return {
-            "error": {
-                "code": "invalid_input",
-                "message": "Malformed classify_context input",
-                "details": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("invalid_input", "Malformed classify_context input", str(error))
 
-    result = router.classify_context(payload.messages, locale=payload.locale, metadata=payload.metadata)
-    return result
+    return router.classify_context(payload.messages, locale=payload.locale, metadata=payload.metadata)
 
 
 @mcp.tool()
@@ -250,14 +254,7 @@ def suggest_route(
             metadata=metadata,
         )
     except Exception as error:
-        return {
-            "error": {
-                "code": "invalid_input",
-                "message": "Malformed suggest_route input",
-                "details": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("invalid_input", "Malformed suggest_route input", str(error))
 
     return router.suggest_route(
         payload.messages,
@@ -286,14 +283,7 @@ def classify_and_suggest(
             metadata=metadata,
         )
     except Exception as error:
-        return {
-            "error": {
-                "code": "invalid_input",
-                "message": "Malformed classify_and_suggest input",
-                "details": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("invalid_input", "Malformed classify_and_suggest input", str(error))
 
     return router.classify_and_suggest(
         payload.messages,
@@ -324,14 +314,7 @@ def route_and_forward(
             metadata=metadata,
         )
     except Exception as error:
-        return {
-            "error": {
-                "code": "invalid_input",
-                "message": "Malformed route_and_forward input",
-                "details": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("invalid_input", "Malformed route_and_forward input", str(error))
 
     return router.route_and_forward_stub(
         req.messages,
@@ -353,34 +336,15 @@ def update_registry(
     try:
         req = UpdateRegistryInput(upsert=upsert, remove=remove, admin_secret=admin_secret)
     except Exception as error:
-        return {
-            "error": {
-                "code": "invalid_input",
-                "message": "Malformed update_registry input",
-                "details": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("invalid_input", "Malformed update_registry input", str(error))
 
     try:
         updated = store.update_registry(upsert=req.upsert or [], remove=req.remove or [], provided_secret=req.admin_secret)
     except PermissionError as error:
-        return {
-            "error": {
-                "code": "forbidden",
-                "message": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("forbidden", str(error))
     except Exception as error:
         logger.exception("Registry update failed")
-        return {
-            "error": {
-                "code": "registry_update_failed",
-                "message": str(error),
-            },
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        return _error_response("registry_update_failed", str(error))
 
     return {
         "status": "ok",
