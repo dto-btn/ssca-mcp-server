@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,12 +65,33 @@ class RegistryStore:
     def lock_path(self) -> Path:
         return self.registry_path.with_suffix(self.registry_path.suffix + ".lock")
 
+    def _write_atomic(self, payload: str) -> None:
+        """Write *payload* to the registry path atomically via a sibling temp file.
+
+        Must be called from within an already-acquired ``_lock_file`` context.
+        """
+        fd, tmp_name = tempfile.mkstemp(
+            dir=self.registry_path.parent,
+            prefix=".registry_tmp_",
+            suffix=".json",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp_name, self.registry_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
     def _read_registry_from_disk(self) -> RegistryModel:
         """Read registry JSON from disk, creating defaults when missing."""
         if not self.registry_path.exists():
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
             defaults = default_registry()
-            self.registry_path.write_text(json.dumps(defaults.model_dump(mode="json"), indent=2), encoding="utf-8")
+            self._write_atomic(json.dumps(defaults.model_dump(mode="json"), indent=2))
             return defaults
 
         raw = self.registry_path.read_text(encoding="utf-8")
@@ -101,10 +124,14 @@ class RegistryStore:
             return registry
 
     def save_registry(self, registry: RegistryModel) -> RegistryModel:
-        """Persist registry to disk and refresh in-memory cache metadata."""
+        """Persist registry to disk atomically and refresh in-memory cache metadata.
+
+        Writes to a sibling temp file first then renames it over the target so
+        a crash mid-write never leaves the registry in a corrupt state.
+        """
         with _lock_file(self.lock_path):
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-            self.registry_path.write_text(json.dumps(registry.model_dump(mode="json"), indent=2), encoding="utf-8")
+            self._write_atomic(json.dumps(registry.model_dump(mode="json"), indent=2))
             self._cached_registry = registry
             stat = self.registry_path.stat()
             self._cached_mtime = (stat.st_mtime_ns, stat.st_size)
@@ -125,7 +152,10 @@ class RegistryStore:
             raise PermissionError("Registry update is disabled. Set ORCHESTRATOR_ENABLE_UPDATE_REGISTRY=true to enable it.")
         if not (self.settings.admin_secret or "").strip():
             raise PermissionError("Admin secret is required to update the registry. Set ORCHESTRATOR_ADMIN_SECRET.")
-        if provided_secret != self.settings.admin_secret:
+        if not hmac.compare_digest(
+            (provided_secret or "").encode(),
+            (self.settings.admin_secret or "").encode(),
+        ):
             raise PermissionError("Admin authentication failed for update_registry.")
 
         current = self.load_registry()
