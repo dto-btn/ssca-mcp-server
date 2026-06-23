@@ -65,12 +65,33 @@ class RegistryStore:
     def lock_path(self) -> Path:
         return self.registry_path.with_suffix(self.registry_path.suffix + ".lock")
 
+    def _write_atomic(self, payload: str) -> None:
+        """Write *payload* to the registry path atomically via a sibling temp file.
+
+        Must be called from within an already-acquired ``_lock_file`` context.
+        """
+        fd, tmp_name = tempfile.mkstemp(
+            dir=self.registry_path.parent,
+            prefix=".registry_tmp_",
+            suffix=".json",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp_name, self.registry_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
     def _read_registry_from_disk(self) -> RegistryModel:
         """Read registry JSON from disk, creating defaults when missing."""
         if not self.registry_path.exists():
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
             defaults = default_registry()
-            self.registry_path.write_text(json.dumps(defaults.model_dump(mode="json"), indent=2), encoding="utf-8")
+            self._write_atomic(json.dumps(defaults.model_dump(mode="json"), indent=2))
             return defaults
 
         raw = self.registry_path.read_text(encoding="utf-8")
@@ -110,22 +131,7 @@ class RegistryStore:
         """
         with _lock_file(self.lock_path):
             self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = json.dumps(registry.model_dump(mode="json"), indent=2)
-            fd, tmp_name = tempfile.mkstemp(
-                dir=self.registry_path.parent,
-                prefix=".registry_tmp_",
-                suffix=".json",
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(payload)
-                os.replace(tmp_name, self.registry_path)
-            except Exception:
-                try:
-                    os.unlink(tmp_name)
-                except OSError:
-                    pass
-                raise
+            self._write_atomic(json.dumps(registry.model_dump(mode="json"), indent=2))
             self._cached_registry = registry
             stat = self.registry_path.stat()
             self._cached_mtime = (stat.st_mtime_ns, stat.st_size)

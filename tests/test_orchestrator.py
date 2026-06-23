@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from server.classifier import KeywordClassifier, LlmClassifierPlugin, resolve_alias, _try_parse_json_object
 from server.config import OrchestratorSettings, load_settings
 from server.registry import RegistryStore
 from server.router import OrchestratorRouter
+from server.schemas import RegistryModel, RegistryServer
 
 
 def make_settings(registry_path: Path, *, hot_reload: bool = False) -> OrchestratorSettings:
@@ -680,7 +683,6 @@ def test_update_registry_wrong_secret_raises_and_leaves_registry_unchanged(tmp_p
     _, store, reg_path = make_router(tmp_path)
     original_text = reg_path.read_text(encoding="utf-8")
 
-    import pytest
     with pytest.raises(PermissionError):
         store.update_registry(upsert=[], remove=[], provided_secret="wrong-secret")
 
@@ -711,7 +713,6 @@ def test_update_registry_disabled_raises_permission_error(tmp_path: Path) -> Non
     )
     store = RegistryStore(settings)
 
-    import pytest
     with pytest.raises(PermissionError, match="disabled"):
         store.update_registry(upsert=[], remove=[], provided_secret="secret")
 
@@ -722,7 +723,6 @@ def test_save_registry_is_atomic_and_round_trips(tmp_path: Path) -> None:
     registry = store.load_registry()
 
     # Mutate in-memory and save.
-    from server.schemas import RegistryServer
     new_server = RegistryServer(
         id="new_mcp",
         endpoint="https://new-mcp.example.com/mcp",
@@ -731,7 +731,6 @@ def test_save_registry_is_atomic_and_round_trips(tmp_path: Path) -> None:
         keywords=["test"],
         weight=1.0,
     )
-    from server.schemas import RegistryModel
     updated = RegistryModel(
         version=registry.version,
         mcp_servers=[*registry.mcp_servers, new_server],
@@ -747,5 +746,5 @@ def test_save_registry_is_atomic_and_round_trips(tmp_path: Path) -> None:
     assert "new_mcp" in ids
 
     # Reloading must reproduce the same state.
-    reloaded = store._read_registry_from_disk()
+    reloaded = store.load_registry()
     assert any(s.id == "new_mcp" for s in reloaded.mcp_servers)
