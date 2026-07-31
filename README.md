@@ -185,6 +185,28 @@ Input:
 
 Output includes ranked recommendations, optional fallback block, optional disambiguation hints, and timestamp.
 
+### classify_and_suggest
+
+Input:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "..." }],
+  "max_recommendations": 3,
+  "require_single_best": false
+}
+```
+
+Output includes category classification plus route recommendations in one response.
+The response also includes an optional `chat_title` field (snake_case) for frontend
+chat auto-rename flows, plus `chatTitle` as a camelCase alias. Legacy clients remain
+compatible because all existing fields are unchanged and both title fields are additive.
+For valid requests with messages, title values are emitted as concise, readable summaries
+targeted at 2 to 5 words, including fallback/unclassified outcomes.
+Title generation is LLM-driven whenever an LLM model/proxy is configured; if LLM title
+generation fails in that mode, the orchestrator returns a safe generic title instead of
+rule-based phrase slicing.
+
 ### route_and_forward
 
 - Phase-1 stub that returns route decision plus a mock forwarding envelope.

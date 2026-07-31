@@ -490,6 +490,49 @@ class CountingStubLlmPlugin(LlmClassifierPlugin):
         return self.result
 
 
+class TitleOnlyStubLlmPlugin(LlmClassifierPlugin):
+    def __init__(self, title: str):
+        super().__init__(make_settings(Path("/tmp/registry.json")))
+        self.title = title
+        self._title_enabled = True
+
+    def classify_with_llm(
+        self,
+        _messages: list[dict[str, str]],
+        _allowed_categories: list[str] | None = None,
+        _server_context: list[dict[str, object]] | None = None,
+    ) -> dict[str, tuple[float, str]]:
+        return {}
+
+    def generate_chat_title(
+        self,
+        messages: list[dict[str, str]],
+        allowed_categories: list[str] | None = None,
+    ) -> str | None:
+        return self.title
+
+
+class EmptyTitleStubLlmPlugin(LlmClassifierPlugin):
+    def __init__(self):
+        super().__init__(make_settings(Path("/tmp/registry.json")))
+        self._title_enabled = True
+
+    def classify_with_llm(
+        self,
+        _messages: list[dict[str, str]],
+        _allowed_categories: list[str] | None = None,
+        _server_context: list[dict[str, object]] | None = None,
+    ) -> dict[str, tuple[float, str]]:
+        return {}
+
+    def generate_chat_title(
+        self,
+        messages: list[dict[str, str]],
+        allowed_categories: list[str] | None = None,
+    ) -> str | None:
+        return None
+
+
 def test_llm_first_pass_selects_category_without_keywords(tmp_path: Path) -> None:
     _, store, _ = make_router(tmp_path)
     llm_settings = make_settings(store.settings.registry_path)
@@ -532,6 +575,128 @@ def test_classify_and_suggest_returns_category_and_routes(tmp_path: Path) -> Non
     assert "recommendations" in result
     assert result["recommendations"]
     assert result["recommendations"][0]["mcp_server_id"] == "db_mcp"
+
+
+def test_classify_and_suggest_preserves_existing_routing_fields(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+
+    result = router.classify_and_suggest(msg("Find recent articles about electric vehicles in Canada."), max_recommendations=3)
+
+    assert "categories" in result
+    assert "recommendations" in result
+    assert "classification_method" in result
+    assert result["recommendations"]
+
+    first = result["recommendations"][0]
+    assert "mcp_server_id" in first
+    assert "endpoint" in first
+    assert "category" in first
+    assert "confidence" in first
+    assert "matched_keywords" in first
+    assert "classification_method" in first
+    assert "rationale" in first
+
+
+def test_classify_and_suggest_includes_chat_title_when_possible(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+
+    result = router.classify_and_suggest(
+        msg("Please schedule a budget review meeting for next Monday morning."),
+        max_recommendations=3,
+    )
+
+    assert "chat_title" in result
+    assert "chatTitle" in result
+    assert isinstance(result["chat_title"], str)
+    assert result["chatTitle"] == result["chat_title"]
+    title = result["chat_title"].strip()
+    assert title
+    assert len(title) <= 80
+    word_count = len(title.split())
+    assert 2 <= word_count <= 5
+    assert "```" not in title
+
+
+def test_classify_and_suggest_llm_disabled_generates_deterministic_title(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+
+    prompt = "Create onboarding checklist for contractor access requests"
+    first = router.classify_and_suggest(msg(prompt), max_recommendations=3)
+    second = router.classify_and_suggest(msg(prompt), max_recommendations=3)
+
+    assert first.get("chat_title")
+    assert second.get("chat_title")
+    assert first["chat_title"] == second["chat_title"]
+
+
+def test_classify_and_suggest_rewrite_email_title_is_readable(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+
+    result = router.classify_and_suggest(
+        msg("Help me rewrite an email so it is more formal"),
+        max_recommendations=3,
+    )
+
+    assert result.get("chat_title") == "Formal Email Rewrite"
+    assert result.get("chatTitle") == "Formal Email Rewrite"
+
+
+def test_classify_and_suggest_uses_llm_title_even_when_classifier_disabled(tmp_path: Path) -> None:
+    router, store, _ = make_router(tmp_path)
+    classifier = KeywordClassifier(store.settings, llm_plugin=TitleOnlyStubLlmPlugin("Formal Email Rewrite"))
+    router.classifier = classifier
+
+    result = router.classify_and_suggest(
+        msg("Help me rewrite an email so it is more formal"),
+        max_recommendations=3,
+    )
+
+    assert result.get("chat_title") == "Formal Email Rewrite"
+    assert result.get("chatTitle") == "Formal Email Rewrite"
+
+
+def test_classify_and_suggest_pronoun_prompt_prefers_readable_intent_title(tmp_path: Path) -> None:
+    router, store, _ = make_router(tmp_path)
+    classifier = KeywordClassifier(store.settings, llm_plugin=TitleOnlyStubLlmPlugin("Other Einstein Discoveries"))
+    router.classifier = classifier
+
+    result = router.classify_and_suggest(
+        msg("He discovered general relativity; what else?"),
+        max_recommendations=3,
+    )
+
+    assert result.get("chat_title") == "Other Einstein Discoveries"
+    assert result.get("chatTitle") == "Other Einstein Discoveries"
+
+
+def test_classify_and_suggest_fallback_still_has_readable_title(tmp_path: Path) -> None:
+    router, _, _ = make_router(tmp_path)
+
+    result = router.classify_and_suggest(msg("!!!"), max_recommendations=3, require_single_best=True)
+
+    assert result.get("recommendations") == []
+    assert "fallback" in result
+    assert isinstance(result.get("chat_title"), str)
+    assert isinstance(result.get("chatTitle"), str)
+    assert result["chat_title"] == result["chatTitle"]
+    assert result["chat_title"] in {"General Request", "Generic Request"}
+
+
+def test_classify_and_suggest_fallback_keeps_deterministic_title_when_llm_title_empty(tmp_path: Path) -> None:
+    router, store, _ = make_router(tmp_path)
+    classifier = KeywordClassifier(store.settings, llm_plugin=EmptyTitleStubLlmPlugin())
+    router.classifier = classifier
+
+    result = router.classify_and_suggest(
+        msg("Could you draft a limerick about entropy and jasmine tea?"),
+        max_recommendations=3,
+        require_single_best=True,
+    )
+
+    assert result.get("classification_method") == "fallback"
+    assert isinstance(result.get("chat_title"), str)
+    assert result.get("chat_title") == result.get("chatTitle")
+    assert result.get("chat_title") not in {"General Request", "Generic Request"}
 
 
 def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:

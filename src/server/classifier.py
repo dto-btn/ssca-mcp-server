@@ -25,6 +25,7 @@ logger = get_logger("orchestrator.classifier")
 
 MAX_LLM_CATEGORIES = 3
 MAX_LLM_RATIONALE_CHARS = 160
+MAX_LLM_TITLE_CHARS = 80
 
 
 def _extract_response_text(response: object) -> str:
@@ -132,13 +133,15 @@ class LlmClassifierPlugin:
         """
         self.settings = settings
         self._client = None
-        self._enabled = settings.enable_llm_classifier
-        if not self._enabled:
+        self._classification_enabled = settings.enable_llm_classifier
+        self._title_enabled = bool(settings.litellm_proxy_url and settings.llm_model)
+        if not self._classification_enabled and not self._title_enabled:
             return
         if not settings.litellm_proxy_url:
-            logger.warning(
-                "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
-            )
+            if self._classification_enabled:
+                logger.warning(
+                    "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
+                )
             return
 
         try:
@@ -180,7 +183,7 @@ class LlmClassifierPlugin:
         Returns a map of ``category -> (confidence, rationale)``. If anything fails,
         the method returns an empty result so callers can fall back to keyword scoring.
         """
-        if not self._enabled or self._client is None or not self.settings.llm_model:
+        if not self._classification_enabled or self._client is None or not self.settings.llm_model:
             return {}
 
         candidate_categories = [category.strip().lower() for category in (allowed_categories or []) if category.strip()]
@@ -275,6 +278,81 @@ class LlmClassifierPlugin:
         except Exception:
             logger.exception("LLM classification failed. Falling back to keyword classifier.")
             return {}
+
+    def generate_chat_title(
+        self,
+        messages: list[dict[str, str]],
+        allowed_categories: list[str] | None = None,
+    ) -> str | None:
+        """Generate a short chat title from the latest user intent.
+
+        Returns ``None`` when generation is unavailable or unsafe, allowing
+        deterministic fallback logic to run in callers.
+        """
+        if not self._title_enabled or self._client is None or not self.settings.llm_model:
+            return None
+
+        latest_user = ""
+        for message in reversed(messages):
+            role = str(message.get("role", "")).strip().lower()
+            content = str(message.get("content", "")).strip()
+            if role == "user" and content:
+                latest_user = content
+                break
+
+        if not latest_user:
+            return None
+
+        categories = [category.strip().lower() for category in (allowed_categories or []) if category.strip()]
+        categories_text = ", ".join(categories[:8]) if categories else "general"
+
+        transcript_lines: list[str] = []
+        for message in messages[-6:]:
+            role = str(message.get("role", "user")).strip().lower() or "user"
+            content = str(message.get("content", "")).strip()
+            if not content:
+                continue
+            transcript_lines.append(f"{role}: {content}")
+
+        system_prompt = (
+            "You generate concise chat titles for the user's latest request intent. "
+            "Return ONLY valid JSON with shape {\"chat_title\": \"...\"}. "
+            "Constraints: title must be 2 to 5 words, max 80 characters, "
+            "neutral and descriptive, no markdown, no code fences, "
+            "and not punctuation-only. "
+            "Resolve pronouns from nearby context when possible and avoid titles that start with vague pronouns like He, She, They, It, This, or That."
+        )
+
+        try:
+            completion = self._client.responses.create(
+                model=self.settings.llm_model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Known categories: {categories_text}\n"
+                            f"Recent conversation context:\n{'\n'.join(transcript_lines)}\n"
+                            f"Latest user request: {latest_user}"
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_output_tokens=80,
+                text={"format": {"type": "json_object"}},
+                extra_headers=self._resolve_auth_headers(),
+            )
+            content = (_extract_response_text(completion) or "{}").strip()
+            parsed = _try_parse_json_object(content)
+            if not parsed:
+                return None
+            title = str(parsed.get("chat_title") or parsed.get("chatTitle") or "").strip()
+            if not title:
+                return None
+            return title[:MAX_LLM_TITLE_CHARS]
+        except Exception:
+            logger.exception("LLM chat title generation failed.")
+            return None
 
 
 def normalize_text(text: str) -> str:

@@ -126,14 +126,14 @@ _T = TypeVar("_T", bound=BaseModel)
 
 def _validate_input(
     model_cls: type[_T],
-    tool_name: str,
+    tool_label: str,
     **kwargs: object,
 ) -> tuple[_T | None, dict[str, object] | None]:
     """Parse and validate *kwargs* into *model_cls*, returning an error envelope on failure."""
     try:
         return model_cls(**kwargs), None
     except Exception as error:
-        return None, _error_response("invalid_input", f"Malformed {tool_name} input", str(error))
+        return None, _error_response("invalid_input", f"Malformed {tool_label} input", str(error))
 
 
 async def suggest_route_http(request: Request) -> JSONResponse:
@@ -294,7 +294,7 @@ async def classify_and_suggest(
     )
     if err is not None:
         return err
-    return await anyio.to_thread.run_sync(
+    result = await anyio.to_thread.run_sync(
         functools.partial(
             router.classify_and_suggest,
             payload.messages,  # type: ignore[union-attr]
@@ -304,6 +304,14 @@ async def classify_and_suggest(
             metadata=payload.metadata,  # type: ignore[union-attr]
         )
     )
+    logger.info(
+        "classify_and_suggest response summary: has_chat_title=%s has_chatTitle=%s recommendations=%s classification_method=%s",
+        bool(result.get("chat_title")),
+        bool(result.get("chatTitle")),
+        len(result.get("recommendations", [])) if isinstance(result.get("recommendations"), list) else 0,
+        result.get("classification_method"),
+    )
+    return result
 
 
 @mcp.tool()
