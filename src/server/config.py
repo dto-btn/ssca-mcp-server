@@ -81,6 +81,7 @@ class OrchestratorSettings:
     litellm_proxy_url: str | None
     litellm_proxy_bearer_token: str | None
     litellm_proxy_api_key: str | None
+    litellm_scope: str | None
     llm_model: str | None
     llm_timeout_seconds: float
     verbose_logging: bool
@@ -110,15 +111,9 @@ def load_settings() -> OrchestratorSettings:
         min_confidence=max(0.0, min(1.0, _to_float(os.getenv("ORCHESTRATOR_MIN_CONFIDENCE"), 0.4))),
         enable_llm_classifier=_to_bool(os.getenv("ENABLE_LLM_CLASSIFIER"), False),
         litellm_proxy_url=litellm_proxy_url,
-        litellm_proxy_bearer_token=_first_non_empty(
-            os.getenv("ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN"),
-            os.getenv("LITELLM_PROXY_BEARER_TOKEN"),
-        ),
-        litellm_proxy_api_key=_first_non_empty(
-            os.getenv("ORCHESTRATOR_LITELLM_PROXY_API_KEY"),
-            os.getenv("LITELLM_PROXY_API_KEY"),
-            os.getenv("LITELLM_MASTER_KEY"),
-        ),
+        litellm_proxy_bearer_token=None,
+        litellm_proxy_api_key=None,
+        litellm_scope=_first_non_empty(os.getenv("ORCHESTRATOR_LITELLM_SCOPE")),
         llm_model=_first_non_empty(
             os.getenv("ORCHESTRATOR_LLM_MODEL"),
             os.getenv("GPT40_DEPLOYMENT_NAME"),

@@ -123,9 +123,10 @@ Notes:
 
 Authentication for LiteLLM proxy:
 
-- ORCHESTRATOR_LITELLM_PROXY_API_KEY
-- or LITELLM_MASTER_KEY (fallback)
-- optional ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN
+- ORCHESTRATOR_LITELLM_SCOPE (for example, `api://<litellm-app-client-id>/.default`)
+- Uses `DefaultAzureCredential`, which resolves to the deployed managed identity or local `az login`.
+
+For production, assign the MCP server's managed identity to the LiteLLM Enterprise Application. For local development, run `az login` with an account assigned to that application. Do not configure a LiteLLM master key, API key, or static bearer token; the server sends a short-lived token for `ORCHESTRATOR_LITELLM_SCOPE` on each LiteLLM request.
 
 ### Core Runtime Settings
 
@@ -213,7 +214,8 @@ If the file does not exist, the service creates a valid default scaffold.
 ## Production Readiness Checklist
 
 - Set explicit CORS origins (avoid permissive defaults).
-- Use a strong API key or bearer token between orchestrator and LiteLLM proxy.
+- Set `ORCHESTRATOR_LITELLM_SCOPE` to the LiteLLM App Service Easy Auth audience's `.default` scope.
+- Assign the deployed managed identity to the LiteLLM Enterprise Application; do not use static LiteLLM credentials.
 - Keep ORCHESTRATOR_ENABLE_UPDATE_REGISTRY disabled unless operationally required.
 - If update_registry is enabled, set ORCHESTRATOR_ADMIN_SECRET.
 - Run with immutable image tags and pinned lockfile updates.
