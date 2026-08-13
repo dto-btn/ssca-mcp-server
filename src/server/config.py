@@ -81,6 +81,7 @@ class OrchestratorSettings:
     litellm_proxy_url: str | None
     litellm_proxy_bearer_token: str | None
     litellm_proxy_api_key: str | None
+    litellm_master_key: str | None
     litellm_scope: str | None
     llm_model: str | None
     llm_timeout_seconds: float
@@ -113,6 +114,7 @@ def load_settings() -> OrchestratorSettings:
         litellm_proxy_url=litellm_proxy_url,
         litellm_proxy_bearer_token=None,
         litellm_proxy_api_key=None,
+        litellm_master_key=_first_non_empty(os.getenv("ORCHESTRATOR_LITELLM_MASTER_KEY")),
         litellm_scope=_first_non_empty(os.getenv("ORCHESTRATOR_LITELLM_SCOPE")),
         llm_model=_first_non_empty(
             os.getenv("ORCHESTRATOR_LLM_MODEL"),

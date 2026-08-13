@@ -156,11 +156,18 @@ class LlmClassifierPlugin:
             self._client = None
 
     def _resolve_auth_headers(self) -> dict[str, str]:
-        """Build managed-identity auth headers for standalone LiteLLM proxy calls."""
+        """Build auth headers for standalone LiteLLM proxy calls.
+
+        Two-layer auth: the managed-identity Entra token satisfies App Service Easy Auth
+        on ``Authorization``, while the LiteLLM master key is sent on ``X-Litellm-Key``.
+        """
         headers: dict[str, str] = {
             "x-caller-system": "orchestrator",
             "x-caller-component": "ssca-mcp-server-classifier",
         }
+
+        if self.settings.litellm_master_key:
+            headers["X-Litellm-Key"] = f"Bearer {self.settings.litellm_master_key}"
 
         if not self.settings.litellm_scope:
             return headers

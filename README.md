@@ -121,12 +121,12 @@ Notes:
 | ORCHESTRATOR_LITELLM_PROXY_URL | LiteLLM/OpenAI-compatible base URL | http://localhost:4000/v1 |
 | ORCHESTRATOR_LLM_MODEL | Model id exposed by LiteLLM | none |
 
-Authentication for LiteLLM proxy:
+Authentication for LiteLLM proxy (two-layer):
 
-- ORCHESTRATOR_LITELLM_SCOPE (for example, `api://<litellm-app-client-id>/.default`)
-- Uses `DefaultAzureCredential`, which resolves to the deployed managed identity or local `az login`.
+- ORCHESTRATOR_LITELLM_SCOPE (for example, `api://<litellm-app-client-id>/.default`) — resolved via `DefaultAzureCredential` (deployed managed identity or local `az login`) and sent on the `Authorization` header to satisfy App Service Easy Auth.
+- ORCHESTRATOR_LITELLM_MASTER_KEY — the LiteLLM master key, sent on the `X-Litellm-Key` header (`Bearer <key>`) to satisfy LiteLLM's own master-key gate. Must match `LITELLM_MASTER_KEY` on the proxy.
 
-For production, assign the MCP server's managed identity to the LiteLLM Enterprise Application. For local development, run `az login` with an account assigned to that application. Do not configure a LiteLLM master key, API key, or static bearer token; the server sends a short-lived token for `ORCHESTRATOR_LITELLM_SCOPE` on each LiteLLM request.
+Both are required in production: the Entra token passes the Easy Auth front door and the master key passes the LiteLLM app gate. For local development, run `az login` with an account assigned to the LiteLLM application (or leave the scope empty when the local proxy has no Easy Auth) and set the master key. Keep the master key server-side only.
 
 ### Core Runtime Settings
 
@@ -215,7 +215,8 @@ If the file does not exist, the service creates a valid default scaffold.
 
 - Set explicit CORS origins (avoid permissive defaults).
 - Set `ORCHESTRATOR_LITELLM_SCOPE` to the LiteLLM App Service Easy Auth audience's `.default` scope.
-- Assign the deployed managed identity to the LiteLLM Enterprise Application; do not use static LiteLLM credentials.
+- Set `ORCHESTRATOR_LITELLM_MASTER_KEY` (matching the proxy's `LITELLM_MASTER_KEY`) from a secret store; it is sent on `X-Litellm-Key`.
+- Assign the deployed managed identity to the LiteLLM Enterprise Application for the Easy Auth token layer.
 - Keep ORCHESTRATOR_ENABLE_UPDATE_REGISTRY disabled unless operationally required.
 - If update_registry is enabled, set ORCHESTRATOR_ADMIN_SECRET.
 - Run with immutable image tags and pinned lockfile updates.
