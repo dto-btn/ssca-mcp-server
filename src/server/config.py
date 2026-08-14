@@ -79,8 +79,6 @@ class OrchestratorSettings:
     min_confidence: float
     enable_llm_classifier: bool
     litellm_proxy_url: str | None
-    litellm_proxy_bearer_token: str | None
-    litellm_proxy_api_key: str | None
     litellm_master_key: str | None
     litellm_scope: str | None
     llm_model: str | None
@@ -112,8 +110,6 @@ def load_settings() -> OrchestratorSettings:
         min_confidence=max(0.0, min(1.0, _to_float(os.getenv("ORCHESTRATOR_MIN_CONFIDENCE"), 0.4))),
         enable_llm_classifier=_to_bool(os.getenv("ENABLE_LLM_CLASSIFIER"), False),
         litellm_proxy_url=litellm_proxy_url,
-        litellm_proxy_bearer_token=None,
-        litellm_proxy_api_key=None,
         litellm_master_key=_first_non_empty(os.getenv("ORCHESTRATOR_LITELLM_MASTER_KEY")),
         litellm_scope=_first_non_empty(os.getenv("ORCHESTRATOR_LITELLM_SCOPE")),
         llm_model=_first_non_empty(

@@ -22,8 +22,6 @@ def make_settings(registry_path: Path, *, hot_reload: bool = False) -> Orchestra
         min_confidence=0.4,
         enable_llm_classifier=False,
         litellm_proxy_url="http://localhost:4000/v1",
-        litellm_proxy_bearer_token=None,
-        litellm_proxy_api_key=None,
         litellm_master_key=None,
         litellm_scope=None,
         llm_model=None,
@@ -54,11 +52,12 @@ def test_load_settings_defaults_to_standalone_litellm_proxy_url(monkeypatch) -> 
 
 
 def test_load_settings_does_not_use_litellm_master_key(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_LITELLM_MASTER_KEY", raising=False)
     monkeypatch.setenv("LITELLM_MASTER_KEY", "test-master-key")
 
     settings = load_settings()
 
-    assert settings.litellm_proxy_api_key is None
+    assert settings.litellm_master_key is None
 
 
 def test_load_settings_normalizes_legacy_embedded_proxy_url(monkeypatch) -> None:
@@ -76,8 +75,6 @@ def test_llm_classifier_resolve_auth_headers_include_caller_identity(tmp_path: P
         min_confidence=0.4,
         enable_llm_classifier=True,
         litellm_proxy_url="http://localhost:4000/v1",
-        litellm_proxy_bearer_token="b1",
-        litellm_proxy_api_key="k1",
         litellm_master_key=None,
         litellm_scope=None,
         llm_model="gpt-4o",
@@ -107,8 +104,6 @@ def test_llm_classifier_uses_managed_identity_token(tmp_path: Path) -> None:
         min_confidence=0.4,
         enable_llm_classifier=True,
         litellm_proxy_url="http://localhost:4000/v1",
-        litellm_proxy_bearer_token=None,
-        litellm_proxy_api_key=None,
         litellm_master_key=None,
         litellm_scope="api://litellm-proxy/.default",
         llm_model="gpt-4o",
@@ -137,8 +132,6 @@ def test_llm_classifier_sends_master_key_on_x_litellm_key_header(tmp_path: Path)
         min_confidence=0.4,
         enable_llm_classifier=True,
         litellm_proxy_url="http://localhost:4000/v1",
-        litellm_proxy_bearer_token=None,
-        litellm_proxy_api_key=None,
         litellm_master_key="sk-test-master-key",
         litellm_scope="api://litellm-proxy/.default",
         llm_model="gpt-4o",
@@ -763,8 +756,6 @@ def test_update_registry_disabled_raises_permission_error(tmp_path: Path) -> Non
         min_confidence=0.4,
         enable_llm_classifier=False,
         litellm_proxy_url="http://localhost:4000/v1",
-        litellm_proxy_bearer_token=None,
-        litellm_proxy_api_key=None,
         litellm_master_key=None,
         litellm_scope=None,
         llm_model=None,
