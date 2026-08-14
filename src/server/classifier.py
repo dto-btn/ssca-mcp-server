@@ -132,6 +132,7 @@ class LlmClassifierPlugin:
         """
         self.settings = settings
         self._client = None
+        self._credential = None
         self._enabled = settings.enable_llm_classifier
         if not self._enabled:
             return
@@ -147,7 +148,7 @@ class LlmClassifierPlugin:
             base_url = settings.litellm_proxy_url.rstrip("/")
             self._client = OpenAI(
                 base_url=base_url,
-                api_key=settings.litellm_proxy_api_key or "#unused-when-auth-via-bearer",
+                api_key="#unused-when-auth-via-bearer",
                 timeout=settings.llm_timeout_seconds,
             )
         except Exception:
@@ -155,17 +156,29 @@ class LlmClassifierPlugin:
             self._client = None
 
     def _resolve_auth_headers(self) -> dict[str, str]:
-        """Build per-request auth headers for standalone LiteLLM proxy calls."""
+        """Build auth headers for standalone LiteLLM proxy calls.
+
+        Two-layer auth: the managed-identity Entra token satisfies App Service Easy Auth
+        on ``Authorization``, while the LiteLLM master key is sent on ``X-Litellm-Key``.
+        """
         headers: dict[str, str] = {
             "x-caller-system": "orchestrator",
             "x-caller-component": "ssca-mcp-server-classifier",
         }
-        if self.settings.litellm_proxy_api_key:
-            headers["x-api-key"] = self.settings.litellm_proxy_api_key
 
-        static_bearer = self.settings.litellm_proxy_bearer_token
-        if static_bearer:
-            headers["Authorization"] = f"Bearer {static_bearer}"
+        if self.settings.litellm_master_key:
+            headers["X-Litellm-Key"] = f"Bearer {self.settings.litellm_master_key}"
+
+        if not self.settings.litellm_scope:
+            return headers
+
+        if self._credential is None:
+            from azure.identity import DefaultAzureCredential
+
+            self._credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+
+        access_token = self._credential.get_token(self.settings.litellm_scope)
+        headers["Authorization"] = f"Bearer {access_token.token}"
 
         return headers
 
