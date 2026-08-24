@@ -203,9 +203,9 @@ chat auto-rename flows, plus `chatTitle` as a camelCase alias. Legacy clients re
 compatible because all existing fields are unchanged and both title fields are additive.
 For valid requests with messages, title values are emitted as concise, readable summaries
 targeted at 2 to 5 words, including fallback/unclassified outcomes.
-Title generation is LLM-driven whenever an LLM model/proxy is configured; if LLM title
-generation fails in that mode, the orchestrator returns a safe generic title instead of
-rule-based phrase slicing.
+When LLM classification is enabled, the same classification response may include a
+chat title; the orchestrator does not make a second title-generation request. When LLM
+classification is disabled or unavailable, it uses the deterministic title generator.
 
 ### route_and_forward
 

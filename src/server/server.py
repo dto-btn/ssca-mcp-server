@@ -157,11 +157,11 @@ async def suggest_route_http(request: Request) -> JSONResponse:
     except Exception as exc:
         return JSONResponse(_error_response("invalid_input", "Invalid request payload", str(exc)), status_code=400)
 
-    # router.suggest_route is synchronous (CPU/IO); run it in a thread so the
-    # Starlette event loop is not blocked while classification runs.
+    # Use the same combined operation as the MCP tool so REST clients receive
+    # category, route, and title data from one classification pass.
     result = await anyio.to_thread.run_sync(
         functools.partial(
-            router.suggest_route,
+            router.classify_and_suggest,
             payload.messages,
             max_recommendations=payload.max_recommendations,
             require_single_best=payload.require_single_best,
@@ -305,9 +305,9 @@ async def classify_and_suggest(
         )
     )
     logger.info(
-        "classify_and_suggest response summary: has_chat_title=%s has_chatTitle=%s recommendations=%s classification_method=%s",
+        "classify_and_suggest response summary: has_chat_title=%s title_source=%s recommendations=%s classification_method=%s",
         bool(result.get("chat_title")),
-        bool(result.get("chatTitle")),
+        result.get("chat_title_source"),
         len(result.get("recommendations", [])) if isinstance(result.get("recommendations"), list) else 0,
         result.get("classification_method"),
     )

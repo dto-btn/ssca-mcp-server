@@ -123,6 +123,12 @@ class ServerScore:
     classification_method: str
 
 
+@dataclass
+class LlmClassification:
+    category_scores: dict[str, tuple[float, str]]
+    chat_title: str | None = None
+
+
 class LlmClassifierPlugin:
     def __init__(self, settings: OrchestratorSettings):
         """Initialize LiteLLM proxy client used for intent category inference.
@@ -134,8 +140,7 @@ class LlmClassifierPlugin:
         self.settings = settings
         self._client = None
         self._classification_enabled = settings.enable_llm_classifier
-        self._title_enabled = bool(settings.litellm_proxy_url and settings.llm_model)
-        if not self._classification_enabled and not self._title_enabled:
+        if not self._classification_enabled:
             return
         if not settings.litellm_proxy_url:
             if self._classification_enabled:
@@ -177,14 +182,15 @@ class LlmClassifierPlugin:
         messages: list[dict[str, str]],
         allowed_categories: list[str] | None = None,
         server_context: list[dict[str, object]] | None = None,
-    ) -> dict[str, tuple[float, str]]:
+        include_chat_title: bool = False,
+    ) -> LlmClassification:
         """Classify conversation intent into categories via LiteLLM Responses API.
 
-        Returns a map of ``category -> (confidence, rationale)``. If anything fails,
-        the method returns an empty result so callers can fall back to keyword scoring.
+        Returns category scores and, when requested, an optional chat title. If anything
+        fails, the method returns an empty result so callers can fall back to keyword scoring.
         """
         if not self._classification_enabled or self._client is None or not self.settings.llm_model:
-            return {}
+            return LlmClassification({})
 
         candidate_categories = [category.strip().lower() for category in (allowed_categories or []) if category.strip()]
         if "general" not in candidate_categories:
@@ -199,7 +205,7 @@ class LlmClassifierPlugin:
             transcript_lines.append(f"{role}: {content}")
 
         if not transcript_lines:
-            return {"general": (1.0, "Empty message context")}
+            return LlmClassification({"general": (1.0, "Empty message context")})
 
         system_prompt = (
             "You classify user intent into one or more categories. "
@@ -216,6 +222,12 @@ class LlmClassifierPlugin:
             "Confidence must be a number between 0 and 1. "
             "If uncertain, choose general."
         )
+        if include_chat_title:
+            system_prompt += (
+                " Also include a top-level chat_title with a neutral, descriptive 2 to 5 word summary "
+                "of the latest user request. It must be at most 80 characters, contain no markdown or code fences, "
+                "and not be punctuation-only."
+            )
 
         server_context_json = "[]"
         if server_context:
@@ -246,7 +258,12 @@ class LlmClassifierPlugin:
             parsed = _try_parse_json_object(content)
             if parsed is None:
                 logger.warning("LLM classifier returned non-JSON payload; using keyword fallback.")
-                return {}
+                return LlmClassification({})
+            chat_title = None
+            if include_chat_title:
+                candidate_title = str(parsed.get("chat_title") or parsed.get("chatTitle") or "").strip()
+                if candidate_title:
+                    chat_title = candidate_title[:MAX_LLM_TITLE_CHARS]
             categories_payload = parsed.get("categories")
             if isinstance(categories_payload, list):
                 results: dict[str, tuple[float, str]] = {}
@@ -264,7 +281,7 @@ class LlmClassifierPlugin:
                     results[category] = (confidence, rationale)
                     if len(results) >= MAX_LLM_CATEGORIES:
                         break
-                return results
+                return LlmClassification(results, chat_title)
 
             category = str(parsed.get("category", "general")).strip().lower()
             confidence = float(parsed.get("confidence", 0.0))
@@ -274,85 +291,10 @@ class LlmClassifierPlugin:
             if category not in set(candidate_categories):
                 category = "general"
             confidence = max(0.0, min(1.0, confidence))
-            return {category: (confidence, rationale)}
+            return LlmClassification({category: (confidence, rationale)}, chat_title)
         except Exception:
             logger.exception("LLM classification failed. Falling back to keyword classifier.")
-            return {}
-
-    def generate_chat_title(
-        self,
-        messages: list[dict[str, str]],
-        allowed_categories: list[str] | None = None,
-    ) -> str | None:
-        """Generate a short chat title from the latest user intent.
-
-        Returns ``None`` when generation is unavailable or unsafe, allowing
-        deterministic fallback logic to run in callers.
-        """
-        if not self._title_enabled or self._client is None or not self.settings.llm_model:
-            return None
-
-        latest_user = ""
-        for message in reversed(messages):
-            role = str(message.get("role", "")).strip().lower()
-            content = str(message.get("content", "")).strip()
-            if role == "user" and content:
-                latest_user = content
-                break
-
-        if not latest_user:
-            return None
-
-        categories = [category.strip().lower() for category in (allowed_categories or []) if category.strip()]
-        categories_text = ", ".join(categories[:8]) if categories else "general"
-
-        transcript_lines: list[str] = []
-        for message in messages[-6:]:
-            role = str(message.get("role", "user")).strip().lower() or "user"
-            content = str(message.get("content", "")).strip()
-            if not content:
-                continue
-            transcript_lines.append(f"{role}: {content}")
-
-        system_prompt = (
-            "You generate concise chat titles for the user's latest request intent. "
-            "Return ONLY valid JSON with shape {\"chat_title\": \"...\"}. "
-            "Constraints: title must be 2 to 5 words, max 80 characters, "
-            "neutral and descriptive, no markdown, no code fences, "
-            "and not punctuation-only. "
-            "Resolve pronouns from nearby context when possible and avoid titles that start with vague pronouns like He, She, They, It, This, or That."
-        )
-
-        try:
-            completion = self._client.responses.create(
-                model=self.settings.llm_model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Known categories: {categories_text}\n"
-                            f"Recent conversation context:\n{'\n'.join(transcript_lines)}\n"
-                            f"Latest user request: {latest_user}"
-                        ),
-                    },
-                ],
-                temperature=0,
-                max_output_tokens=80,
-                text={"format": {"type": "json_object"}},
-                extra_headers=self._resolve_auth_headers(),
-            )
-            content = (_extract_response_text(completion) or "{}").strip()
-            parsed = _try_parse_json_object(content)
-            if not parsed:
-                return None
-            title = str(parsed.get("chat_title") or parsed.get("chatTitle") or "").strip()
-            if not title:
-                return None
-            return title[:MAX_LLM_TITLE_CHARS]
-        except Exception:
-            logger.exception("LLM chat title generation failed.")
-            return None
+            return LlmClassification({})
 
 
 def normalize_text(text: str) -> str:
@@ -435,7 +377,8 @@ class KeywordClassifier:
         self,
         messages: list[dict[str, str]],
         registry: RegistryModel,
-    ) -> dict[str, tuple[float, str]] | None:
+        include_chat_title: bool = False,
+    ) -> LlmClassification | None:
         """Ask the LLM for category scores constrained by registry categories."""
         if not self.settings.enable_llm_classifier:
             return None
@@ -460,17 +403,31 @@ class KeywordClassifier:
             for server in registry.mcp_servers
         ]
         try:
-            llm_scores = self.llm_plugin.classify_with_llm(messages, allowed_categories, server_context)
+            llm_result = self.llm_plugin.classify_with_llm(
+                messages,
+                allowed_categories,
+                server_context,
+                include_chat_title=include_chat_title,
+            )
         except TypeError:
-            llm_scores = self.llm_plugin.classify_with_llm(messages)
+            llm_result = self.llm_plugin.classify_with_llm(messages)
 
+        if isinstance(llm_result, LlmClassification):
+            llm_scores = llm_result.category_scores
+            chat_title = llm_result.chat_title
+        else:
+            llm_scores = llm_result
+            chat_title = None
         if not llm_scores:
             return None
 
-        return {
-            category.strip().lower(): (float(confidence), rationale)
-            for category, (confidence, rationale) in llm_scores.items()
-        }
+        return LlmClassification(
+            {
+                category.strip().lower(): (float(confidence), rationale)
+                for category, (confidence, rationale) in llm_scores.items()
+            },
+            chat_title,
+        )
 
     def _score_servers_from_llm_category(
         self,
@@ -565,6 +522,22 @@ class KeywordClassifier:
         messages: list[dict[str, str]],
         registry: RegistryModel,
     ) -> list[ServerScore]:
+        scores, _ = self._score_servers_with_title(messages, registry, include_chat_title=False)
+        return scores
+
+    def score_servers_with_title(
+        self,
+        messages: list[dict[str, str]],
+        registry: RegistryModel,
+    ) -> tuple[list[ServerScore], str | None]:
+        return self._score_servers_with_title(messages, registry, include_chat_title=True)
+
+    def _score_servers_with_title(
+        self,
+        messages: list[dict[str, str]],
+        registry: RegistryModel,
+        include_chat_title: bool,
+    ) -> tuple[list[ServerScore], str | None]:
         """Rank candidate MCP servers from conversation context.
 
         Strategy:
@@ -574,13 +547,13 @@ class KeywordClassifier:
         """
         scoped_messages = self._truncate_messages(messages)
         if not scoped_messages:
-            return []
+            return [], None
 
-        llm_scores = self._llm_category_scores(scoped_messages, registry)
-        if llm_scores:
-            llm_server_scores = self._score_servers_from_llm_categories(registry, llm_scores)
+        llm_result = self._llm_category_scores(scoped_messages, registry, include_chat_title=include_chat_title)
+        if llm_result:
+            llm_server_scores = self._score_servers_from_llm_categories(registry, llm_result.category_scores)
             if llm_server_scores:
-                return llm_server_scores
+                return llm_server_scores, llm_result.chat_title
 
         per_server_score: dict[str, float] = {}
         per_server_keywords: dict[str, list[str]] = {}
@@ -602,7 +575,7 @@ class KeywordClassifier:
                             seen.append(keyword)
 
         if not per_server_score:
-            return []
+            return [], llm_result.chat_title if llm_result else None
 
         max_raw = max(per_server_score.values()) if per_server_score else 1.0
         if max_raw <= 0:
@@ -645,7 +618,7 @@ class KeywordClassifier:
             )
 
         scores.sort(key=lambda item: (item.confidence, item.server.weight, item.density), reverse=True)
-        return scores
+        return scores, llm_result.chat_title if llm_result else None
 
     def classify_categories(
         self,

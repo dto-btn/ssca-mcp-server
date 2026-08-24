@@ -440,43 +440,29 @@ class OrchestratorRouter:
         self,
         messages: list[dict[str, str]],
         categories_data: list[dict[str, object]],
-    ) -> str:
+        llm_title: str | None = None,
+    ) -> tuple[str, str]:
         """Generate an optional chat title from latest user intent.
 
         LLM generation is attempted first when available; deterministic fallback
-        ensures stable titles when LLM is disabled.
+        ensures stable titles when LLM is disabled or does not return a usable
+        title. The source is returned so clients can distinguish the outcomes.
         """
         latest_user_message = self._latest_user_message(messages)
         if not latest_user_message:
             latest_user_message = self._latest_message_content(messages)
         if not latest_user_message:
-            return DEFAULT_CHAT_TITLE
+            return DEFAULT_CHAT_TITLE, "deterministic"
 
-        llm_title = ""
-        llm_plugin = getattr(self.classifier, "llm_plugin", None)
-        if llm_plugin:
-            allowed_categories = [
-                str(item.get("name", "")).strip().lower()
-                for item in categories_data
-                if isinstance(item, dict) and item.get("name")
-            ]
-            try:
-                llm_generated = llm_plugin.generate_chat_title(
-                    messages=messages,
-                    allowed_categories=allowed_categories,
-                )
-            except Exception:
-                llm_generated = None
-
-            if isinstance(llm_generated, str):
-                llm_title = self._sanitize_title_text(llm_generated)
-                llm_title = self._format_title_for_display(llm_title)
-                if self._is_safe_title(llm_title):
-                    return llm_title
+        if isinstance(llm_title, str):
+            llm_title = self._sanitize_title_text(llm_title)
+            llm_title = self._format_title_for_display(llm_title)
+            if self._is_safe_title(llm_title):
+                return llm_title, "ai"
 
         fallback_title = self._title_from_latest_user_message(latest_user_message)
         if self._is_safe_title(fallback_title):
-            return fallback_title
+            return fallback_title, "deterministic"
 
         if categories_data:
             category_name = str(categories_data[0].get("name", "")).strip()
@@ -484,9 +470,9 @@ class OrchestratorRouter:
                 category_words = category_name.replace("_", " ").replace("-", " ")
                 category_title = self._format_title_for_display(f"{category_words} request")
                 if self._is_safe_title(category_title):
-                    return category_title
+                    return category_title, "deterministic"
 
-        return DEFAULT_CHAT_TITLE
+        return DEFAULT_CHAT_TITLE, "deterministic"
 
     def classify_context(
         self,
@@ -582,7 +568,7 @@ class OrchestratorRouter:
         normalized = self._normalize_messages(messages)
         try:
             registry = self.registry_store.load_registry()
-            ranked = self.classifier.score_servers(normalized, registry)
+            ranked, llm_title = self.classifier.score_servers_with_title(normalized, registry)
             max_recos = max_recommendations or registry.routing_rules.max_recommendations
 
             categories_data, classification_method, explanation = self._build_category_response(ranked, registry)
@@ -592,26 +578,32 @@ class OrchestratorRouter:
                 max_recommendations=max_recos,
                 require_single_best=require_single_best,
             )
+            final_classification_method = str(
+                route_response.get("classification_method") or classification_method
+            )
             try:
-                chat_title = self._generate_chat_title(normalized, categories_data)
+                chat_title, chat_title_source = self._generate_chat_title(
+                    normalized,
+                    categories_data,
+                    llm_title,
+                )
             except Exception:
                 logger.exception("chat title generation failed; returning routing response without title")
                 chat_title = DEFAULT_CHAT_TITLE
+                chat_title_source = "deterministic"
 
             response: dict[str, object] = {
                 "categories": categories_data,
                 "explanation": explanation,
-                "classification_method": (
-                    str(route_response.get("classification_method"))
-                    if route_response.get("classification_method")
-                    else classification_method
-                ),
+                "classification_method": final_classification_method,
                 "recommendations": route_response.get("recommendations", []),
                 "timestamp": datetime.now(UTC).isoformat(),
             }
 
             response["chat_title"] = chat_title
             response["chatTitle"] = chat_title
+            response["chat_title_source"] = chat_title_source
+            response["chatTitleSource"] = chat_title_source
 
             if "fallback" in route_response:
                 response["fallback"] = route_response["fallback"]

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from server.classifier import KeywordClassifier, LlmClassifierPlugin, resolve_alias, _try_parse_json_object
+from server.classifier import LlmClassification, KeywordClassifier, LlmClassifierPlugin, resolve_alias, _try_parse_json_object
 from server.config import OrchestratorSettings, load_settings
 from server.registry import RegistryStore
 from server.router import OrchestratorRouter
@@ -475,9 +475,10 @@ class StubLlmPlugin(LlmClassifierPlugin):
 
 
 class CountingStubLlmPlugin(LlmClassifierPlugin):
-    def __init__(self, result: dict[str, tuple[float, str]]):
+    def __init__(self, result: dict[str, tuple[float, str]], title: str | None = None):
         super().__init__(make_settings(Path("/tmp/registry.json")))
         self.result = result
+        self.title = title
         self.calls = 0
 
     def classify_with_llm(
@@ -485,52 +486,38 @@ class CountingStubLlmPlugin(LlmClassifierPlugin):
         _messages: list[dict[str, str]],
         _allowed_categories: list[str] | None = None,
         _server_context: list[dict[str, object]] | None = None,
-    ) -> dict[str, tuple[float, str]]:
+        include_chat_title: bool = False,
+    ) -> LlmClassification:
         self.calls += 1
-        return self.result
+        return LlmClassification(self.result, self.title if include_chat_title else None)
 
 
 class TitleOnlyStubLlmPlugin(LlmClassifierPlugin):
     def __init__(self, title: str):
         super().__init__(make_settings(Path("/tmp/registry.json")))
         self.title = title
-        self._title_enabled = True
-
     def classify_with_llm(
         self,
         _messages: list[dict[str, str]],
         _allowed_categories: list[str] | None = None,
         _server_context: list[dict[str, object]] | None = None,
-    ) -> dict[str, tuple[float, str]]:
-        return {}
-
-    def generate_chat_title(
-        self,
-        messages: list[dict[str, str]],
-        allowed_categories: list[str] | None = None,
-    ) -> str | None:
-        return self.title
+        include_chat_title: bool = False,
+    ) -> LlmClassification:
+        return LlmClassification({"general": (0.9, "General request")}, self.title if include_chat_title else None)
 
 
 class EmptyTitleStubLlmPlugin(LlmClassifierPlugin):
     def __init__(self):
         super().__init__(make_settings(Path("/tmp/registry.json")))
-        self._title_enabled = True
-
     def classify_with_llm(
         self,
         _messages: list[dict[str, str]],
         _allowed_categories: list[str] | None = None,
         _server_context: list[dict[str, object]] | None = None,
-    ) -> dict[str, tuple[float, str]]:
-        return {}
-
-    def generate_chat_title(
-        self,
-        messages: list[dict[str, str]],
-        allowed_categories: list[str] | None = None,
-    ) -> str | None:
-        return None
+        include_chat_title: bool = False,
+    ) -> LlmClassification:
+        del include_chat_title
+        return LlmClassification({"general": (0.9, "General request")})
 
 
 def test_llm_first_pass_selects_category_without_keywords(tmp_path: Path) -> None:
@@ -627,6 +614,8 @@ def test_classify_and_suggest_llm_disabled_generates_deterministic_title(tmp_pat
     assert first.get("chat_title")
     assert second.get("chat_title")
     assert first["chat_title"] == second["chat_title"]
+    assert first["chat_title_source"] == "deterministic"
+    assert first["chatTitleSource"] == "deterministic"
 
 
 def test_classify_and_suggest_rewrite_email_title_is_readable(tmp_path: Path) -> None:
@@ -639,11 +628,21 @@ def test_classify_and_suggest_rewrite_email_title_is_readable(tmp_path: Path) ->
 
     assert result.get("chat_title") == "Formal Email Rewrite"
     assert result.get("chatTitle") == "Formal Email Rewrite"
+    assert result.get("chat_title_source") == "ai"
+    assert result.get("chatTitleSource") == "ai"
 
 
-def test_classify_and_suggest_uses_llm_title_even_when_classifier_disabled(tmp_path: Path) -> None:
-    router, store, _ = make_router(tmp_path)
-    classifier = KeywordClassifier(store.settings, llm_plugin=TitleOnlyStubLlmPlugin("Formal Email Rewrite"))
+def test_classify_and_suggest_uses_llm_title_independently_of_route_classification(tmp_path: Path) -> None:
+    _, store, _ = make_router(tmp_path)
+    llm_settings = OrchestratorSettings(**{**store.settings.__dict__, "enable_llm_classifier": True})
+    classifier = KeywordClassifier(
+        llm_settings,
+        llm_plugin=CountingStubLlmPlugin(
+            {"general": (0.92, "General request")},
+            "Formal Email Rewrite",
+        ),
+    )
+    router = OrchestratorRouter(settings=llm_settings, registry_store=store)
     router.classifier = classifier
 
     result = router.classify_and_suggest(
@@ -651,13 +650,17 @@ def test_classify_and_suggest_uses_llm_title_even_when_classifier_disabled(tmp_p
         max_recommendations=3,
     )
 
+    assert result.get("classification_method") == "fallback"
     assert result.get("chat_title") == "Formal Email Rewrite"
     assert result.get("chatTitle") == "Formal Email Rewrite"
+    assert result.get("chat_title_source") == "ai"
 
 
-def test_classify_and_suggest_pronoun_prompt_prefers_readable_intent_title(tmp_path: Path) -> None:
-    router, store, _ = make_router(tmp_path)
-    classifier = KeywordClassifier(store.settings, llm_plugin=TitleOnlyStubLlmPlugin("Other Einstein Discoveries"))
+def test_classify_and_suggest_fallback_prompt_uses_llm_title(tmp_path: Path) -> None:
+    _, store, _ = make_router(tmp_path)
+    llm_settings = OrchestratorSettings(**{**store.settings.__dict__, "enable_llm_classifier": True})
+    classifier = KeywordClassifier(llm_settings, llm_plugin=TitleOnlyStubLlmPlugin("Other Einstein Discoveries"))
+    router = OrchestratorRouter(settings=llm_settings, registry_store=store)
     router.classifier = classifier
 
     result = router.classify_and_suggest(
@@ -665,8 +668,10 @@ def test_classify_and_suggest_pronoun_prompt_prefers_readable_intent_title(tmp_p
         max_recommendations=3,
     )
 
+    assert result.get("classification_method") == "fallback"
     assert result.get("chat_title") == "Other Einstein Discoveries"
     assert result.get("chatTitle") == "Other Einstein Discoveries"
+    assert result.get("chat_title_source") == "ai"
 
 
 def test_classify_and_suggest_fallback_still_has_readable_title(tmp_path: Path) -> None:
@@ -683,8 +688,10 @@ def test_classify_and_suggest_fallback_still_has_readable_title(tmp_path: Path) 
 
 
 def test_classify_and_suggest_fallback_keeps_deterministic_title_when_llm_title_empty(tmp_path: Path) -> None:
-    router, store, _ = make_router(tmp_path)
-    classifier = KeywordClassifier(store.settings, llm_plugin=EmptyTitleStubLlmPlugin())
+    _, store, _ = make_router(tmp_path)
+    llm_settings = OrchestratorSettings(**{**store.settings.__dict__, "enable_llm_classifier": True})
+    classifier = KeywordClassifier(llm_settings, llm_plugin=EmptyTitleStubLlmPlugin())
+    router = OrchestratorRouter(settings=llm_settings, registry_store=store)
     router.classifier = classifier
 
     result = router.classify_and_suggest(
@@ -697,6 +704,8 @@ def test_classify_and_suggest_fallback_keeps_deterministic_title_when_llm_title_
     assert isinstance(result.get("chat_title"), str)
     assert result.get("chat_title") == result.get("chatTitle")
     assert result.get("chat_title") not in {"General Request", "Generic Request"}
+    assert result.get("chat_title_source") == "deterministic"
+    assert result.get("chatTitleSource") == "deterministic"
 
 
 def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:
@@ -704,7 +713,7 @@ def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:
     llm_settings = make_settings(store.settings.registry_path)
     llm_settings = OrchestratorSettings(**{**llm_settings.__dict__, "enable_llm_classifier": True})
 
-    counting_stub = CountingStubLlmPlugin({"database": (0.9, "Detected SQL task")})
+    counting_stub = CountingStubLlmPlugin({"database": (0.9, "Detected SQL task")}, "SQL Query Assistance")
     classifier = KeywordClassifier(llm_settings, llm_plugin=counting_stub)
     router = OrchestratorRouter(settings=llm_settings, registry_store=store)
     router.classifier = classifier
@@ -713,6 +722,7 @@ def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:
 
     assert "recommendations" in result
     assert counting_stub.calls == 1
+    assert result["chat_title"] == "SQL Query Assistance"
 
 
 def test_suggest_route_deduplicates_same_server_id(tmp_path: Path) -> None:
