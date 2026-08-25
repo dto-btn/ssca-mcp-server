@@ -601,9 +601,9 @@ def test_classify_and_suggest_includes_chat_title_when_possible(tmp_path: Path) 
     )
 
     assert "chat_title" in result
-    assert "chatTitle" in result
+    assert "chatTitle" not in result
+    assert "chatTitleSource" not in result
     assert isinstance(result["chat_title"], str)
-    assert result["chatTitle"] == result["chat_title"]
     title = result["chat_title"].strip()
     assert title
     assert len(title) <= 80
@@ -623,7 +623,6 @@ def test_classify_and_suggest_llm_disabled_generates_deterministic_title(tmp_pat
     assert second.get("chat_title")
     assert first["chat_title"] == second["chat_title"]
     assert first["chat_title_source"] == "deterministic"
-    assert first["chatTitleSource"] == "deterministic"
 
 
 def test_classify_and_suggest_rewrite_email_title_is_readable(tmp_path: Path) -> None:
@@ -635,9 +634,7 @@ def test_classify_and_suggest_rewrite_email_title_is_readable(tmp_path: Path) ->
     )
 
     assert result.get("chat_title") == "Formal Email Rewrite"
-    assert result.get("chatTitle") == "Formal Email Rewrite"
     assert result.get("chat_title_source") == "deterministic"
-    assert result.get("chatTitleSource") == "deterministic"
 
 
 def test_classify_and_suggest_uses_llm_title_independently_of_route_classification(tmp_path: Path) -> None:
@@ -660,7 +657,6 @@ def test_classify_and_suggest_uses_llm_title_independently_of_route_classificati
 
     assert result.get("classification_method") == "fallback"
     assert result.get("chat_title") == "Formal Email Rewrite"
-    assert result.get("chatTitle") == "Formal Email Rewrite"
     assert result.get("chat_title_source") == "ai"
 
 
@@ -678,7 +674,6 @@ def test_classify_and_suggest_fallback_prompt_uses_llm_title(tmp_path: Path) -> 
 
     assert result.get("classification_method") == "fallback"
     assert result.get("chat_title") == "Other Einstein Discoveries"
-    assert result.get("chatTitle") == "Other Einstein Discoveries"
     assert result.get("chat_title_source") == "ai"
 
 
@@ -690,8 +685,6 @@ def test_classify_and_suggest_fallback_still_has_readable_title(tmp_path: Path) 
     assert result.get("recommendations") == []
     assert "fallback" in result
     assert isinstance(result.get("chat_title"), str)
-    assert isinstance(result.get("chatTitle"), str)
-    assert result["chat_title"] == result["chatTitle"]
     assert result["chat_title"] in {"General Request", "Generic Request"}
 
 
@@ -710,10 +703,8 @@ def test_classify_and_suggest_fallback_keeps_deterministic_title_when_llm_title_
 
     assert result.get("classification_method") == "fallback"
     assert isinstance(result.get("chat_title"), str)
-    assert result.get("chat_title") == result.get("chatTitle")
     assert result.get("chat_title") not in {"General Request", "Generic Request"}
     assert result.get("chat_title_source") == "deterministic"
-    assert result.get("chatTitleSource") == "deterministic"
 
 
 def test_classify_and_suggest_uses_single_llm_call(tmp_path: Path) -> None:

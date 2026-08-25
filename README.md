@@ -205,15 +205,16 @@ Input:
 ```
 
 Output includes category classification plus route recommendations in one response.
-The response also includes an optional `chat_title` field (snake_case) for frontend
-chat auto-rename flows, plus `chatTitle` as a camelCase alias. Legacy clients remain
-compatible because all existing fields are unchanged and both title fields are additive.
+The response also includes an optional `chat_title` field for frontend chat
+auto-rename flows. Snake_case is the canonical and only casing, matching the rest
+of the payload; there is no camelCase alias. Legacy clients remain compatible
+because all existing fields are unchanged and the title fields are additive.
 For valid requests with messages, title values are emitted as concise, readable summaries
 targeted at 2 to 5 words, including fallback/unclassified outcomes.
 When LLM classification is enabled, the same classification response may include a
 chat title; the orchestrator does not make a second title-generation request. When LLM
 classification is disabled or unavailable, it uses the deterministic title generator.
-The response also includes `chat_title_source` and `chatTitleSource` with values:
+The response also includes `chat_title_source` with values:
 
 - ai: title came from the LLM classification response.
 - deterministic: title came from local fallback heuristics.

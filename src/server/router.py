@@ -386,9 +386,7 @@ class OrchestratorRouter:
             }
 
             response["chat_title"] = chat_title
-            response["chatTitle"] = chat_title
             response["chat_title_source"] = chat_title_source
-            response["chatTitleSource"] = chat_title_source
 
             if "fallback" in route_response:
                 response["fallback"] = route_response["fallback"]

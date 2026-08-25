@@ -129,7 +129,11 @@ def _validate_input(
     tool_label: str,
     **kwargs: object,
 ) -> tuple[_T | None, dict[str, object] | None]:
-    """Parse and validate *kwargs* into *model_cls*, returning an error envelope on failure."""
+    """Parse and validate *kwargs* into *model_cls*, returning an error envelope on failure.
+
+    Named ``tool_label`` rather than ``tool_name`` because ``route_and_forward``
+    forwards its own ``tool_name`` argument through ``**kwargs``.
+    """
     try:
         return model_cls(**kwargs), None
     except Exception as error:
@@ -304,7 +308,7 @@ async def classify_and_suggest(
             metadata=payload.metadata,  # type: ignore[union-attr]
         )
     )
-    logger.info(
+    logger.debug(
         "classify_and_suggest response summary: has_chat_title=%s title_source=%s recommendations=%s classification_method=%s",
         bool(result.get("chat_title")),
         result.get("chat_title_source"),
