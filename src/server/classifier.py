@@ -15,17 +15,18 @@ try:
     from .config import OrchestratorSettings
     from .logging_utils import get_logger
     from .schemas import RegistryModel, RegistryServer
+    from .title import TITLE_MAX_CHARS, TITLE_MAX_WORDS, TITLE_MIN_WORDS
 except ImportError:
     from config import OrchestratorSettings
     from logging_utils import get_logger
     from schemas import RegistryModel, RegistryServer
+    from title import TITLE_MAX_CHARS, TITLE_MAX_WORDS, TITLE_MIN_WORDS
 
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 logger = get_logger("orchestrator.classifier")
 
 MAX_LLM_CATEGORIES = 3
 MAX_LLM_RATIONALE_CHARS = 160
-MAX_LLM_TITLE_CHARS = 80
 
 
 def _extract_response_text(response: object) -> str:
@@ -224,8 +225,9 @@ class LlmClassifierPlugin:
         )
         if include_chat_title:
             system_prompt += (
-                " Also include a top-level chat_title with a neutral, descriptive 2 to 5 word summary "
-                "of the latest user request. It must be at most 80 characters, contain no markdown or code fences, "
+                f" Also include a top-level chat_title with a neutral, descriptive {TITLE_MIN_WORDS} to "
+                f"{TITLE_MAX_WORDS} word summary of the latest user request. It must be at most "
+                f"{TITLE_MAX_CHARS} characters, contain no markdown or code fences, "
                 "and not be punctuation-only."
             )
 
@@ -263,7 +265,7 @@ class LlmClassifierPlugin:
             if include_chat_title:
                 candidate_title = str(parsed.get("chat_title") or parsed.get("chatTitle") or "").strip()
                 if candidate_title:
-                    chat_title = candidate_title[:MAX_LLM_TITLE_CHARS]
+                    chat_title = candidate_title[:TITLE_MAX_CHARS]
             categories_payload = parsed.get("categories")
             if isinstance(categories_payload, list):
                 results: dict[str, tuple[float, str]] = {}
