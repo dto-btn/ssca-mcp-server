@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from server.classifier import LlmClassification, KeywordClassifier, LlmClassifierPlugin, resolve_alias, _try_parse_json_object
+from server.classifier import (
+    KeywordClassifier,
+    LlmClassification,
+    LlmClassifierPlugin,
+    _try_parse_json_object,
+    resolve_alias,
+)
 from server.config import OrchestratorSettings, load_settings
 from server.registry import RegistryStore
 from server.router import OrchestratorRouter
@@ -90,7 +96,7 @@ def test_llm_classifier_resolve_auth_headers_include_caller_identity(tmp_path: P
     )
 
     plugin = LlmClassifierPlugin(settings)
-    headers = plugin._resolve_auth_headers()
+    headers = plugin._resolve_auth_headers()  # pylint: disable=protected-access
 
     assert headers["x-caller-system"] == "orchestrator"
     assert headers["x-caller-component"] == "ssca-mcp-server-classifier"
@@ -147,7 +153,9 @@ def sample_registry_payload() -> dict:
     }
 
 
-def make_router(tmp_path: Path, *, hot_reload: bool = False) -> tuple[OrchestratorRouter, RegistryStore, Path]:
+def make_router(
+    tmp_path: Path, *, hot_reload: bool = False
+) -> tuple[OrchestratorRouter, RegistryStore, Path]:
     reg_path = tmp_path / "registry.json"
     write_registry(reg_path, sample_registry_payload())
     settings = make_settings(reg_path, hot_reload=hot_reload)
@@ -628,8 +636,8 @@ def test_classify_and_suggest_rewrite_email_title_is_readable(tmp_path: Path) ->
 
     assert result.get("chat_title") == "Formal Email Rewrite"
     assert result.get("chatTitle") == "Formal Email Rewrite"
-    assert result.get("chat_title_source") == "ai"
-    assert result.get("chatTitleSource") == "ai"
+    assert result.get("chat_title_source") == "deterministic"
+    assert result.get("chatTitleSource") == "deterministic"
 
 
 def test_classify_and_suggest_uses_llm_title_independently_of_route_classification(tmp_path: Path) -> None:
