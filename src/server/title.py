@@ -79,6 +79,17 @@ _TITLE_OBJECT_HINTS = (
 )
 
 
+def latest_message_content(messages: list[dict[str, str]], role: str | None = None) -> str:
+    """Return the most recent non-empty message content, optionally filtered by role."""
+    for message in reversed(messages):
+        if role is not None and str(message.get("role", "")).strip().lower() != role:
+            continue
+        content = str(message.get("content", "")).strip()
+        if content:
+            return content
+    return ""
+
+
 class ChatTitleGenerator:
     """Produce short chat titles from an LLM candidate or deterministic heuristics."""
 
@@ -187,9 +198,9 @@ class ChatTitleGenerator:
         ensures stable titles when LLM is disabled or does not return a usable
         title. The source is returned so clients can distinguish the outcomes.
         """
-        latest_user_message = self._latest_user_message(messages)
-        if not latest_user_message:
-            latest_user_message = self._latest_message_content(messages)
+        latest_user_message = latest_message_content(messages, role="user") or latest_message_content(
+            messages
+        )
         if not latest_user_message:
             return DEFAULT_CHAT_TITLE, "deterministic"
 
@@ -211,21 +222,3 @@ class ChatTitleGenerator:
                     return category_title, "deterministic"
 
         return DEFAULT_CHAT_TITLE, "deterministic"
-
-    def _latest_user_message(self, messages: list[dict[str, str]]) -> str:
-        """Return the most recent non-empty user message content."""
-        for message in reversed(messages):
-            if str(message.get("role", "")).strip().lower() != "user":
-                continue
-            content = str(message.get("content", "")).strip()
-            if content:
-                return content
-        return ""
-
-    def _latest_message_content(self, messages: list[dict[str, str]]) -> str:
-        """Return latest non-empty content from any role as a last-resort source."""
-        for message in reversed(messages):
-            content = str(message.get("content", "")).strip()
-            if content:
-                return content
-        return ""
