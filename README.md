@@ -14,6 +14,7 @@ This service is standalone and does not depend on categoryService.info.
 ## Key Capabilities
 
 - LLM-first intent classification through LiteLLM proxy with deterministic keyword fallback.
+- Single-call LLM contract for classify_and_suggest: category routing and optional AI chat title are produced in one model response.
 - Multi-category routing support with tie handling and route ranking.
 - Built-in fallback behavior when intent confidence is low.
 - Registry-backed server metadata, aliases, and routing rules.
@@ -121,6 +122,12 @@ Notes:
 | ORCHESTRATOR_LITELLM_PROXY_URL | LiteLLM/OpenAI-compatible base URL | http://localhost:4000/v1 |
 | ORCHESTRATOR_LLM_MODEL | Model id exposed by LiteLLM | none |
 
+Chat title behavior in classify_and_suggest:
+
+- If ENABLE_LLM_CLASSIFIER=true and proxy/model are configured, the orchestrator performs one LLM call and may return both categories and chat_title from that same response.
+- If ENABLE_LLM_CLASSIFIER=false, no LLM call is made for titles; chat titles are generated deterministically.
+- There is no separate title-generation toggle. Title generation follows the classifier mode to avoid an uncoordinated second LLM request.
+
 Authentication for LiteLLM proxy:
 
 - ORCHESTRATOR_LITELLM_PROXY_API_KEY
@@ -206,6 +213,10 @@ targeted at 2 to 5 words, including fallback/unclassified outcomes.
 When LLM classification is enabled, the same classification response may include a
 chat title; the orchestrator does not make a second title-generation request. When LLM
 classification is disabled or unavailable, it uses the deterministic title generator.
+The response also includes `chat_title_source` and `chatTitleSource` with values:
+
+- ai: title came from the LLM classification response.
+- deterministic: title came from local fallback heuristics.
 
 ### route_and_forward
 
