@@ -14,6 +14,7 @@ This service is standalone and does not depend on categoryService.info.
 ## Key Capabilities
 
 - LLM-first intent classification through LiteLLM proxy with deterministic keyword fallback.
+- Single-call LLM contract for classify_and_suggest: category routing and optional AI chat title are produced in one model response.
 - Multi-category routing support with tie handling and route ranking.
 - Built-in fallback behavior when intent confidence is low.
 - Registry-backed server metadata, aliases, and routing rules.
@@ -121,6 +122,12 @@ Notes:
 | ORCHESTRATOR_LITELLM_PROXY_URL | LiteLLM/OpenAI-compatible base URL | http://localhost:4000/v1 |
 | ORCHESTRATOR_LLM_MODEL | Model id exposed by LiteLLM | none |
 
+Chat title behavior in classify_and_suggest:
+
+- If ENABLE_LLM_CLASSIFIER=true and proxy/model are configured, the orchestrator performs one LLM call and may return both categories and chat_title from that same response.
+- If ENABLE_LLM_CLASSIFIER=false, no LLM call is made for titles; chat titles are generated deterministically.
+- There is no separate title-generation toggle. Title generation follows the classifier mode to avoid an uncoordinated second LLM request.
+
 Authentication for LiteLLM proxy:
 
 - ORCHESTRATOR_LITELLM_PROXY_API_KEY
@@ -184,6 +191,33 @@ Input:
 ```
 
 Output includes ranked recommendations, optional fallback block, optional disambiguation hints, and timestamp.
+
+### classify_and_suggest
+
+Input:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "..." }],
+  "max_recommendations": 3,
+  "require_single_best": false
+}
+```
+
+Output includes category classification plus route recommendations in one response.
+The response also includes an optional `chat_title` field for frontend chat
+auto-rename flows. Snake_case is the canonical and only casing, matching the rest
+of the payload; there is no camelCase alias. Legacy clients remain compatible
+because all existing fields are unchanged and the title fields are additive.
+For valid requests with messages, title values are emitted as concise, readable summaries
+targeted at 2 to 5 words, including fallback/unclassified outcomes.
+When LLM classification is enabled, the same classification response may include a
+chat title; the orchestrator does not make a second title-generation request. When LLM
+classification is disabled or unavailable, it uses the deterministic title generator.
+The response also includes `chat_title_source` with values:
+
+- ai: title came from the LLM classification response.
+- deterministic: title came from local fallback heuristics.
 
 ### route_and_forward
 
