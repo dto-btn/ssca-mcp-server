@@ -32,6 +32,7 @@ def make_settings(registry_path: Path, *, hot_reload: bool = False) -> Orchestra
         enable_hot_reload=hot_reload,
         update_registry_enabled=True,
         admin_secret="secret",
+        litellm_proxy_scope=None,
     )
 
 
@@ -43,6 +44,8 @@ def test_load_settings_defaults_to_standalone_litellm_proxy_url(monkeypatch) -> 
         "LITELLM_PROXY_API_KEY",
         "ORCHESTRATOR_LITELLM_PROXY_API_KEY",
         "LITELLM_MASTER_KEY",
+        "ORCHESTRATOR_LITELLM_SCOPE",
+        "LITELLM_SCOPE",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -59,6 +62,14 @@ def test_load_settings_uses_litellm_master_key_as_api_key(monkeypatch) -> None:
     settings = load_settings()
 
     assert settings.litellm_proxy_api_key == "test-master-key"
+
+
+def test_load_settings_reads_litellm_scope(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_LITELLM_SCOPE", "api://proxy/.default")
+
+    settings = load_settings()
+
+    assert settings.litellm_proxy_scope == "api://proxy/.default"
 
 
 def test_load_settings_normalizes_legacy_embedded_proxy_url(monkeypatch) -> None:
@@ -87,6 +98,7 @@ def test_llm_classifier_resolve_auth_headers_include_caller_identity(tmp_path: P
         enable_hot_reload=False,
         update_registry_enabled=True,
         admin_secret="secret",
+        litellm_proxy_scope=None,
     )
 
     plugin = LlmClassifierPlugin(settings)
@@ -94,7 +106,7 @@ def test_llm_classifier_resolve_auth_headers_include_caller_identity(tmp_path: P
 
     assert headers["x-caller-system"] == "orchestrator"
     assert headers["x-caller-component"] == "ssca-mcp-server-classifier"
-    assert headers["x-api-key"] == "k1"
+    assert headers["x-litellm-api-key"] == "k1"
     assert headers["Authorization"] == "Bearer b1"
 
 

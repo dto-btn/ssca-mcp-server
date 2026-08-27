@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from dataclasses import dataclass
 
 try:
@@ -132,9 +133,21 @@ class LlmClassifierPlugin:
         """
         self.settings = settings
         self._client = None
+        self._credential = None
+        self._cached_bearer: tuple[str, float] | None = None
         self._enabled = settings.enable_llm_classifier
         if not self._enabled:
             return
+
+        if settings.litellm_proxy_scope:
+            try:
+                from azure.identity import DefaultAzureCredential
+
+                self._credential = DefaultAzureCredential()
+            except Exception:
+                logger.exception("Failed to initialize DefaultAzureCredential for LiteLLM scope auth.")
+                self._credential = None
+
         if not settings.litellm_proxy_url:
             logger.warning(
                 "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
@@ -154,6 +167,24 @@ class LlmClassifierPlugin:
             logger.exception("Failed to initialize LiteLLM proxy client for LLM classifier.")
             self._client = None
 
+    def _resolve_scoped_bearer_token(self) -> str | None:
+        """Acquire and cache a bearer token for the configured LiteLLM scope."""
+        if not self._credential or not self.settings.litellm_proxy_scope:
+            return None
+
+        now = time.time()
+        if self._cached_bearer and self._cached_bearer[1] > now + 60:
+            return self._cached_bearer[0]
+
+        try:
+            token = self._credential.get_token(self.settings.litellm_proxy_scope)
+        except Exception:
+            logger.exception("Failed to acquire LiteLLM scope bearer token.")
+            return None
+
+        self._cached_bearer = (token.token, float(token.expires_on))
+        return token.token
+
     def _resolve_auth_headers(self) -> dict[str, str]:
         """Build per-request auth headers for standalone LiteLLM proxy calls."""
         headers: dict[str, str] = {
@@ -161,11 +192,16 @@ class LlmClassifierPlugin:
             "x-caller-component": "ssca-mcp-server-classifier",
         }
         if self.settings.litellm_proxy_api_key:
-            headers["x-api-key"] = self.settings.litellm_proxy_api_key
+            headers["x-litellm-api-key"] = self.settings.litellm_proxy_api_key
 
         static_bearer = self.settings.litellm_proxy_bearer_token
         if static_bearer:
             headers["Authorization"] = f"Bearer {static_bearer}"
+            return headers
+
+        scoped_bearer = self._resolve_scoped_bearer_token()
+        if scoped_bearer:
+            headers["Authorization"] = f"Bearer {scoped_bearer}"
 
         return headers
 

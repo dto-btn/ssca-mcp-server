@@ -126,6 +126,12 @@ Authentication for LiteLLM proxy:
 - ORCHESTRATOR_LITELLM_PROXY_API_KEY
 - or LITELLM_MASTER_KEY (fallback)
 - optional ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN
+- optional ORCHESTRATOR_LITELLM_SCOPE (acquire Entra bearer token via DefaultAzureCredential)
+
+When both are present, the classifier sends:
+
+- `Authorization: Bearer <token>` (static bearer token or scoped Entra token)
+- `x-litellm-api-key: <virtual-key>` (LiteLLM virtual key)
 
 ### Core Runtime Settings
 
