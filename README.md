@@ -123,15 +123,20 @@ Notes:
 
 Authentication for LiteLLM proxy:
 
-- ORCHESTRATOR_LITELLM_PROXY_API_KEY
-- or LITELLM_MASTER_KEY (fallback)
-- optional ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN
-- optional ORCHESTRATOR_LITELLM_SCOPE (acquire Entra bearer token via DefaultAzureCredential)
+- **Production (LiteLLM behind App Service Easy Auth):** set `ORCHESTRATOR_LITELLM_SCOPE` to the
+  LiteLLM app's app-only scope `api://<litellm-client-id>/.default`. The classifier acquires an Entra
+  token via `DefaultAzureCredential` (managed identity / service principal) and sends it as
+  `Authorization: Bearer <token>`. Easy Auth validates it and the proxy's `custom_auth` hook trusts
+  the injected principal. The identity must be assigned the **Service.Access** app role. No LiteLLM
+  key is used.
+- **Local dev (keyed proxy, no Easy Auth):** use `ORCHESTRATOR_LITELLM_PROXY_API_KEY` (or
+  `LITELLM_MASTER_KEY` fallback), or `ORCHESTRATOR_LITELLM_PROXY_BEARER_TOKEN`.
 
-When both are present, the classifier sends:
+Every request also carries `x-caller-system: orchestrator` and
+`x-caller-component: ssca-mcp-server-classifier` for per-system analytics. The classifier sends:
 
-- `Authorization: Bearer <token>` (static bearer token or scoped Entra token)
-- `x-litellm-api-key: <virtual-key>` (LiteLLM virtual key)
+- `Authorization: Bearer <token>` (scoped Entra token in prod, or static bearer token)
+- `x-litellm-api-key: <key>` only when `ORCHESTRATOR_LITELLM_PROXY_API_KEY` is set (local dev)
 
 ### Core Runtime Settings
 
