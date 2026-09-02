@@ -576,7 +576,7 @@ wheels = [
 
 [[package]]
 name = "ssca-mcp-server"
-version = "0.0.0.dev2"
+version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
