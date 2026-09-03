@@ -139,6 +139,12 @@ class LlmClassifierPlugin:
         if not self._enabled:
             return
 
+        if not settings.litellm_proxy_url:
+            logger.warning(
+                "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
+            )
+            return
+
         if settings.litellm_proxy_scope:
             try:
                 from azure.identity import DefaultAzureCredential
@@ -148,11 +154,12 @@ class LlmClassifierPlugin:
                 logger.exception("Failed to initialize DefaultAzureCredential for LiteLLM scope auth.")
                 self._credential = None
 
-        if not settings.litellm_proxy_url:
+        if settings.litellm_proxy_api_key and settings.litellm_proxy_scope:
             logger.warning(
-                "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
+                "Both ORCHESTRATOR_LITELLM_PROXY_API_KEY and ORCHESTRATOR_LITELLM_SCOPE are set; "
+                "the scoped Entra token takes precedence in production. Unset the API key unless "
+                "this is intentional local-dev configuration."
             )
-            return
 
         try:
             from openai import OpenAI
