@@ -13,21 +13,26 @@ try:
     from .config import OrchestratorSettings
     from .logging_utils import get_logger, redact_text
     from .registry import RegistryStore
+    from .title import DEFAULT_CHAT_TITLE, ChatTitleGenerator
 except ImportError:
     from classifier import KeywordClassifier, resolve_alias
     from config import OrchestratorSettings
     from logging_utils import get_logger, redact_text
     from registry import RegistryStore
+    from title import DEFAULT_CHAT_TITLE, ChatTitleGenerator
 
 logger = get_logger("orchestrator.router")
 
 
 class OrchestratorRouter:
+    """Turn classifier scores into category, route, and chat-title responses."""
+
     def __init__(self, settings: OrchestratorSettings, registry_store: RegistryStore):
         """Compose classification and registry services for routing operations."""
         self.settings = settings
         self.registry_store = registry_store
         self.classifier = KeywordClassifier(settings=settings)
+        self.title_generator = ChatTitleGenerator()
 
     def _normalize_messages(self, messages: list[object]) -> list[dict[str, str]]:
         """Normalize mixed message objects/dicts into ``{role, content}`` records."""
@@ -348,7 +353,7 @@ class OrchestratorRouter:
         normalized = self._normalize_messages(messages)
         try:
             registry = self.registry_store.load_registry()
-            ranked = self.classifier.score_servers(normalized, registry)
+            ranked, llm_title = self.classifier.score_servers_with_title(normalized, registry)
             max_recos = max_recommendations or registry.routing_rules.max_recommendations
 
             categories_data, classification_method, explanation = self._build_category_response(ranked, registry)
@@ -358,18 +363,30 @@ class OrchestratorRouter:
                 max_recommendations=max_recos,
                 require_single_best=require_single_best,
             )
+            final_classification_method = str(
+                route_response.get("classification_method") or classification_method
+            )
+            try:
+                chat_title, chat_title_source = self.title_generator.generate(
+                    normalized,
+                    categories_data,
+                    llm_title,
+                )
+            except Exception:
+                logger.exception("chat title generation failed; returning routing response without title")
+                chat_title = DEFAULT_CHAT_TITLE
+                chat_title_source = "deterministic"
 
             response: dict[str, object] = {
                 "categories": categories_data,
                 "explanation": explanation,
-                "classification_method": (
-                    str(route_response.get("classification_method"))
-                    if route_response.get("classification_method")
-                    else classification_method
-                ),
+                "classification_method": final_classification_method,
                 "recommendations": route_response.get("recommendations", []),
                 "timestamp": datetime.now(UTC).isoformat(),
             }
+
+            response["chat_title"] = chat_title
+            response["chat_title_source"] = chat_title_source
 
             if "fallback" in route_response:
                 response["fallback"] = route_response["fallback"]

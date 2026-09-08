@@ -126,14 +126,18 @@ _T = TypeVar("_T", bound=BaseModel)
 
 def _validate_input(
     model_cls: type[_T],
-    tool_name: str,
+    tool_label: str,
     **kwargs: object,
 ) -> tuple[_T | None, dict[str, object] | None]:
-    """Parse and validate *kwargs* into *model_cls*, returning an error envelope on failure."""
+    """Parse and validate *kwargs* into *model_cls*, returning an error envelope on failure.
+
+    Named ``tool_label`` rather than ``tool_name`` because ``route_and_forward``
+    forwards its own ``tool_name`` argument through ``**kwargs``.
+    """
     try:
         return model_cls(**kwargs), None
     except Exception as error:
-        return None, _error_response("invalid_input", f"Malformed {tool_name} input", str(error))
+        return None, _error_response("invalid_input", f"Malformed {tool_label} input", str(error))
 
 
 async def suggest_route_http(request: Request) -> JSONResponse:
@@ -157,11 +161,11 @@ async def suggest_route_http(request: Request) -> JSONResponse:
     except Exception as exc:
         return JSONResponse(_error_response("invalid_input", "Invalid request payload", str(exc)), status_code=400)
 
-    # router.suggest_route is synchronous (CPU/IO); run it in a thread so the
-    # Starlette event loop is not blocked while classification runs.
+    # Use the same combined operation as the MCP tool so REST clients receive
+    # category, route, and title data from one classification pass.
     result = await anyio.to_thread.run_sync(
         functools.partial(
-            router.suggest_route,
+            router.classify_and_suggest,
             payload.messages,
             max_recommendations=payload.max_recommendations,
             require_single_best=payload.require_single_best,
@@ -294,7 +298,7 @@ async def classify_and_suggest(
     )
     if err is not None:
         return err
-    return await anyio.to_thread.run_sync(
+    result = await anyio.to_thread.run_sync(
         functools.partial(
             router.classify_and_suggest,
             payload.messages,  # type: ignore[union-attr]
@@ -304,6 +308,14 @@ async def classify_and_suggest(
             metadata=payload.metadata,  # type: ignore[union-attr]
         )
     )
+    logger.debug(
+        "classify_and_suggest response summary: has_chat_title=%s title_source=%s recommendations=%s classification_method=%s",
+        bool(result.get("chat_title")),
+        result.get("chat_title_source"),
+        len(result.get("recommendations", [])) if isinstance(result.get("recommendations"), list) else 0,
+        result.get("classification_method"),
+    )
+    return result
 
 
 @mcp.tool()
