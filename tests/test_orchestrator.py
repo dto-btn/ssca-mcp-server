@@ -112,8 +112,76 @@ def test_llm_classifier_resolve_auth_headers_include_caller_identity(tmp_path: P
 
     assert headers["x-caller-system"] == "orchestrator"
     assert headers["x-caller-component"] == "ssca-mcp-server-classifier"
-    assert headers["x-litellm-api-key"] == "k1"
     assert headers["Authorization"] == "Bearer b1"
+    # Bearer token present → the API key must NOT be sent alongside it (avoids leaking the key).
+    assert "x-litellm-api-key" not in headers
+
+
+def test_llm_classifier_resolve_auth_headers_api_key_only(tmp_path: Path) -> None:
+    settings = OrchestratorSettings(
+        registry_path=tmp_path / "registry.json",
+        max_messages=10,
+        min_confidence=0.4,
+        enable_llm_classifier=True,
+        litellm_proxy_url="http://localhost:4000/v1",
+        litellm_proxy_bearer_token=None,
+        litellm_proxy_api_key="k1",
+        llm_model="gpt-4o",
+        llm_timeout_seconds=8.0,
+        verbose_logging=False,
+        redact_sensitive_tokens=True,
+        max_message_chars=4000,
+        max_total_chars=20000,
+        enable_hot_reload=False,
+        update_registry_enabled=True,
+        admin_secret="secret",
+        litellm_proxy_scope=None,
+    )
+
+    plugin = LlmClassifierPlugin(settings)
+    headers = plugin._resolve_auth_headers()  # pylint: disable=protected-access
+
+    # No bearer token → the API key is the credential.
+    assert headers["x-litellm-api-key"] == "k1"
+    assert "Authorization" not in headers
+
+
+def test_llm_classifier_skips_call_when_bearer_expected_but_unavailable(tmp_path: Path) -> None:
+    settings = OrchestratorSettings(
+        registry_path=tmp_path / "registry.json",
+        max_messages=10,
+        min_confidence=0.4,
+        enable_llm_classifier=True,
+        litellm_proxy_url="http://localhost:4000/v1",
+        litellm_proxy_bearer_token=None,
+        litellm_proxy_api_key=None,
+        llm_model="gpt-4o",
+        llm_timeout_seconds=8.0,
+        verbose_logging=False,
+        redact_sensitive_tokens=True,
+        max_message_chars=4000,
+        max_total_chars=20000,
+        enable_hot_reload=False,
+        update_registry_enabled=True,
+        admin_secret="secret",
+        litellm_proxy_scope="api://proxy/.default",
+    )
+
+    plugin = LlmClassifierPlugin(settings)
+    # Simulate Entra token acquisition failure: no credential, so no bearer token is ever resolved.
+    plugin._credential = None  # pylint: disable=protected-access
+
+    class _ExplodingClient:
+        class responses:
+            @staticmethod
+            def create(**_kwargs):
+                raise AssertionError("LLM call must be skipped when no bearer token was acquired")
+
+    plugin._client = _ExplodingClient()  # pylint: disable=protected-access
+
+    result = plugin.classify_with_llm([{"role": "user", "content": "hello"}])
+
+    assert result.category_scores == {}
 
 
 def write_registry(path: Path, payload: dict) -> None:
