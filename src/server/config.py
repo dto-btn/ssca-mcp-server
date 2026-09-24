@@ -90,6 +90,7 @@ class OrchestratorSettings:
     enable_hot_reload: bool
     update_registry_enabled: bool
     admin_secret: str | None
+    litellm_proxy_scope: str | None = None
 
 
 def load_settings() -> OrchestratorSettings:
@@ -118,6 +119,10 @@ def load_settings() -> OrchestratorSettings:
             os.getenv("ORCHESTRATOR_LITELLM_PROXY_API_KEY"),
             os.getenv("LITELLM_PROXY_API_KEY"),
             os.getenv("LITELLM_MASTER_KEY"),
+        ),
+        litellm_proxy_scope=_first_non_empty(
+            os.getenv("ORCHESTRATOR_LITELLM_SCOPE"),
+            os.getenv("LITELLM_SCOPE"),
         ),
         llm_model=_first_non_empty(
             os.getenv("ORCHESTRATOR_LLM_MODEL"),

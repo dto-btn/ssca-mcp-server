@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from dataclasses import dataclass
 
 try:
@@ -140,15 +141,34 @@ class LlmClassifierPlugin:
         """
         self.settings = settings
         self._client = None
+        self._credential = None
+        self._cached_bearer: tuple[str, float] | None = None
         self._classification_enabled = settings.enable_llm_classifier
         if not self._classification_enabled:
             return
+
         if not settings.litellm_proxy_url:
             if self._classification_enabled:
                 logger.warning(
                     "LLM classifier enabled but not configured (missing ORCHESTRATOR_LITELLM_PROXY_URL)."
                 )
             return
+
+        if settings.litellm_proxy_scope:
+            try:
+                from azure.identity import DefaultAzureCredential
+
+                self._credential = DefaultAzureCredential()
+            except Exception:
+                logger.exception("Failed to initialize DefaultAzureCredential for LiteLLM scope auth.")
+                self._credential = None
+
+        if settings.litellm_proxy_api_key and settings.litellm_proxy_scope:
+            logger.warning(
+                "Both ORCHESTRATOR_LITELLM_PROXY_API_KEY and ORCHESTRATOR_LITELLM_SCOPE are set; "
+                "the scoped Entra token takes precedence in production. Unset the API key unless "
+                "this is intentional local-dev configuration."
+            )
 
         try:
             from openai import OpenAI
@@ -163,18 +183,45 @@ class LlmClassifierPlugin:
             logger.exception("Failed to initialize LiteLLM proxy client for LLM classifier.")
             self._client = None
 
+    def _resolve_scoped_bearer_token(self) -> str | None:
+        """Acquire and cache a bearer token for the configured LiteLLM scope."""
+        if not self._credential or not self.settings.litellm_proxy_scope:
+            return None
+
+        now = time.time()
+        if self._cached_bearer and self._cached_bearer[1] > now + 60:
+            return self._cached_bearer[0]
+
+        try:
+            token = self._credential.get_token(self.settings.litellm_proxy_scope)
+        except Exception:
+            logger.exception("Failed to acquire LiteLLM scope bearer token.")
+            return None
+
+        self._cached_bearer = (token.token, float(token.expires_on))
+        return token.token
+
     def _resolve_auth_headers(self) -> dict[str, str]:
         """Build per-request auth headers for standalone LiteLLM proxy calls."""
         headers: dict[str, str] = {
             "x-caller-system": "orchestrator",
             "x-caller-component": "ssca-mcp-server-classifier",
         }
-        if self.settings.litellm_proxy_api_key:
-            headers["x-api-key"] = self.settings.litellm_proxy_api_key
 
         static_bearer = self.settings.litellm_proxy_bearer_token
         if static_bearer:
             headers["Authorization"] = f"Bearer {static_bearer}"
+            return headers
+
+        scoped_bearer = self._resolve_scoped_bearer_token()
+        if scoped_bearer:
+            headers["Authorization"] = f"Bearer {scoped_bearer}"
+            return headers
+
+        # Only attach the API key when no bearer token is available, so a stray
+        # ORCHESTRATOR_LITELLM_PROXY_API_KEY is never sent alongside (and leaked with) a bearer token.
+        if self.settings.litellm_proxy_api_key:
+            headers["x-litellm-api-key"] = self.settings.litellm_proxy_api_key
 
         return headers
 
@@ -238,6 +285,19 @@ class LlmClassifierPlugin:
             except Exception:
                 server_context_json = "[]"
 
+        auth_headers = self._resolve_auth_headers()
+        # Bearer auth is the prod mechanism (App Service Easy Auth); if it's configured but no
+        # token was acquired, skip the call the proxy would 401 anyway and use keyword fallback.
+        bearer_expected = bool(
+            self.settings.litellm_proxy_scope or self.settings.litellm_proxy_bearer_token
+        )
+        if bearer_expected and "Authorization" not in auth_headers:
+            logger.warning(
+                "Skipping LLM classification: bearer auth configured but no token acquired; "
+                "using keyword fallback."
+            )
+            return LlmClassification({})
+
         try:
             completion = self._client.responses.create(
                 model=self.settings.llm_model,
@@ -254,7 +314,7 @@ class LlmClassifierPlugin:
                 temperature=0,
                 max_output_tokens=260,
                 text={"format": {"type": "json_object"}},
-                extra_headers=self._resolve_auth_headers(),
+                extra_headers=auth_headers,
             )
             content = (_extract_response_text(completion) or "{}").strip()
             parsed = _try_parse_json_object(content)
